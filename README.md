@@ -21,21 +21,44 @@ OpenParsec is built against iOS 14 and later.
 OpenParsec will never support App Store distribution as it bundles the Parsec SDK, which can't be redistributed under App Store policies.
 
 ## Touch Control
-Touch modes can be set in Settings or the stream menu. Touchpad moves the cursor like a laptop trackpad, Direct clicks where the finger lands.
+There are four touch input modes, the same set Chrome Remote Desktop offers on a phone. Pick one in Settings → Touch Input, from the quick actions button or from the stream menu (Touch Input). Every mode is sent to the PC as mouse, wheel and keyboard input, so it works on any Windows or Mac host.
+
+| | Trackpad | Direct Touch | Two-Finger Pan & Zoom | Three-Finger Pan & Zoom |
+| --- | --- | --- | --- | --- |
+| Pointer | A cursor you move | Under your finger | Under your finger | Under your finger |
+| Tap | Left click at the cursor | Left click where you tap | Left click where you tap | Left click where you tap |
+| Double tap | Double click | Double click | Double click | Double click |
+| Press and hold | Grey circle, then drag | Right click | Right click | Right click |
+| Hold, then drag | Drag | Drag | Drag | Drag |
+| 1-finger drag | Move the cursor | Scroll | Scroll | Scroll |
+| 2-finger tap | Right click | Right click | Right click | Right click |
+| 2-finger drag | Scroll | Scroll | Move the view | Scroll |
+| 2-finger pinch | Zoom the view | Zoom in the app (Ctrl + wheel) | Zoom the view | Zoom in the app (Ctrl + wheel) |
+| 3-finger drag | Swipe up/down: keyboard | Swipe up/down: keyboard | Swipe up/down: keyboard | Move the view |
+| 3-finger pinch | | | | Zoom the view |
+
+Direct Touch always shows the whole desktop. In the other modes, dragging something near the edge of a zoomed view keeps sliding the view so you can reach what's off screen.
+
+Common to all modes:
 
 | Gesture | Action |
 | --- | --- |
-| Tap | Click |
-| 2-finger tap | Right click |
-| Press and hold | Drag (Touchpad) |
-| 2-finger drag | Scroll (up/down and sideways) |
-| Pinch | Zoom, with Pinch to Zoom on |
-| 3-finger tap | On-screen keyboard |
+| 3-finger tap | Middle click (or the keyboard, Settings → Three-Finger Tap) |
+| 3-finger swipe up / down | Show / hide the keyboard (opens the stream menu when it's already hidden). Not in Three-Finger Pan & Zoom |
 | Swipe in from the left edge | Stream menu, when the buttons are hidden |
+
+In Trackpad mode, Settings → Two-Finger Drag can move the zoomed picture instead of scrolling, and Pinch to Zoom turns view zoom on or off.
+
+The round button in the bottom-right corner opens quick actions: Keyboard, Touch Input, Ctrl+Alt+Del, Start Menu, Resize Desktop to Fit, Fit to Screen (in modes that zoom the view), Stream Menu and Disconnect. It hides with the other buttons and can be turned off in Settings.
+
+Every click shows a short ripple where it landed (blue for right/middle clicks and drags). Click Ripple turns it off.
 
 Pointer Acceleration (on by default) makes slow finger movement precise and fast swipes travel further, like a laptop trackpad. Haptic Feedback gives a small tap on every click, right click and drag. Both can be turned off in Settings.
 
 The keyboard bar has one-tap shortcuts: Copy, Paste, Cut, Undo, Select All, Alt+Tab, Show Desktop, Task Manager, plus Home/End/Page Up/Page Down. With Option Key as Command on (Mac hosts) Copy/Paste/Cut/Undo/Select All use ⌘ instead of Ctrl and Alt+Tab becomes ⌘+Tab; Show Desktop and Task Manager are Windows shortcuts.
+
+## Liquid Glass
+On iOS 26 and later OpenParsec uses Apple's Liquid Glass material: the stream menu, menu and keyboard buttons, stats bar, keyboard key bar, hint bubbles, the Touch Input chooser, the main screen's top and bottom bars (the host list scrolls underneath them), and the Connect, Login and Close buttons. Older iOS versions keep the classic flat look. Liquid Glass needs a build made with Xcode 26 or newer, which CI uses.
 
 ## Mouse & Keyboard
 Hardware mice and keyboards are supported.

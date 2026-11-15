@@ -29,7 +29,7 @@ class TouchController {
 		// send press+release back-to-back. the old 20ms async release could be orphaned by a
 		// reconnect/disconnect landing in that window, leaving the button (esp. right) stuck on the
 		// host — which pops a context menu that survives the transition.
-		if SettingsHandler.cursorMode == .direct {
+		if SettingsHandler.cursorMode.isTouch {
 			let x = Int32(location.x)
 			let y = Int32(location.y)
 

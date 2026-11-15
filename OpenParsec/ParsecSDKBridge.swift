@@ -74,15 +74,71 @@ enum DecoderPref: Int {
     case h265
 }
 
-enum CursorMode: Int {
-    case touchpad
-    case direct
+// The four ways a finger can drive the PC, the same set Chrome Remote Desktop offers on a phone.
+enum CursorMode: Int, CaseIterable {
+	case touchpad            // finger moves a cursor like a laptop trackpad
+	case direct              // the PC is a touch screen, the whole desktop always fits
+	case twoFingerPanZoom    // touch screen, two fingers zoom and move the view
+	case threeFingerPanZoom  // touch screen, two-finger gestures go to the PC, three fingers move the view
+
+	// every mode except the trackpad clicks right where the finger is
+	var isTouch: Bool { self != .touchpad }
+
+	var title: String {
+		switch self {
+		case .touchpad: return "Trackpad"
+		case .direct: return "Direct Touch"
+		case .twoFingerPanZoom: return "Two-Finger Pan & Zoom"
+		case .threeFingerPanZoom: return "Three-Finger Pan & Zoom"
+		}
+	}
+
+	var shortTitle: String {
+		switch self {
+		case .touchpad: return "Trackpad"
+		case .direct: return "Direct"
+		case .twoFingerPanZoom: return "2-Finger"
+		case .threeFingerPanZoom: return "3-Finger"
+		}
+	}
+
+	var icon: String {
+		switch self {
+		case .touchpad: return "rectangle.and.hand.point.up.left"
+		case .direct: return "hand.point.up.left"
+		case .twoFingerPanZoom: return "hand.draw"
+		case .threeFingerPanZoom: return "hand.raised"
+		}
+	}
+
+	var summary: String {
+		switch self {
+		case .touchpad:
+			return "Move a cursor like on a laptop. Tap to click, two fingers to right click and scroll, hold then drag to move things."
+		case .direct:
+			return "Touch the PC screen itself. Tap to click, hold to right click, drag to scroll, hold then drag to move things. The desktop always fits."
+		case .twoFingerPanZoom:
+			return "Like Direct Touch, plus two fingers pinch to zoom and drag to move around a big desktop."
+		case .threeFingerPanZoom:
+			return "Like Direct Touch with two-finger pinch and scroll sent to the PC. Three fingers zoom and move the view."
+		}
+	}
 }
 
 enum RightClickPosition: Int {
 	case firstFinger
 	case middle
 	case secondFinger
+}
+
+enum TwoFingerDrag: Int {
+	case scroll
+	case panView
+}
+
+enum ThreeFingerTapAction: Int {
+	case keyboard
+	case middleClick
 }
 
 enum MenuSwipeEdge: Int {

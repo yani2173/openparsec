@@ -44,7 +44,7 @@ struct ParsecStatusBar: View {
 					.lineSpacing(20)
 					.lineLimit(nil)
 			}
-			.background(Rectangle().fill(Color("BackgroundPrompt").opacity(0.75)))
+			.liquidGlass(in: Rectangle(), fallback: Color("BackgroundPrompt").opacity(0.75))
 			.foregroundColor(Color("Foreground"))
 			.frame(maxHeight: .infinity, alignment: .top)
 			.zIndex(1)
@@ -270,6 +270,15 @@ struct MenuRowsHeightKey: PreferenceKey {
 	}
 }
 
+// one entry in the floating quick actions stack
+struct QuickAction: Identifiable {
+	let id: String
+	let icon: String
+	let label: String
+	var destructive: Bool = false
+	let run: () -> Void
+}
+
 struct ParsecView: View {
 	var controller: ContentView?
 
@@ -288,6 +297,10 @@ struct ParsecView: View {
 	@AppStorage("menuSwipeHintShown") var menuSwipeHintShown: Bool = false
 
 	@State var showKeyboard: Bool = false
+	@State var quickActionsOpen: Bool = false
+	@State var showModePicker: Bool = false
+	@State var modeRowsHeight: CGFloat = 0
+	@State var cursorModeAtOpen: CursorMode = .touchpad
 	@State var zoomEnabled: Bool = false
 	@Environment(\.verticalSizeClass) var verticalSizeClass
 
@@ -371,8 +384,7 @@ struct ParsecView: View {
 							.foregroundColor(.white)
 							.padding(.horizontal, 20)
 							.frame(minHeight: 44)
-							.background(Color.white.opacity(0.2))
-							.cornerRadius(8)
+							.liquidGlass(in: glassRounded(8, glass: 22), interactive: true, fallback: Color.white.opacity(0.2))
 					}
 					.padding(.top, 4)
 					if settingsStore.showConnectionLog {
@@ -390,8 +402,7 @@ struct ParsecView: View {
 					.foregroundColor(.white)
 					.padding(.horizontal, 16)
 					.padding(.vertical, 10)
-					.background(Color("BackgroundPrompt").opacity(0.85))
-					.cornerRadius(8)
+					.liquidGlass(in: glassRounded(8, glass: 20), tint: Color.black.opacity(0.3), fallback: Color("BackgroundPrompt").opacity(0.85))
 					.zIndex(3)
 			}
 
@@ -401,12 +412,30 @@ struct ParsecView: View {
 					.foregroundColor(.white)
 					.padding(.horizontal, 16)
 					.padding(.vertical, 10)
-					.background(Color("BackgroundPrompt").opacity(0.85))
-					.cornerRadius(8)
+					.liquidGlass(in: glassRounded(8, glass: 20), tint: Color.black.opacity(0.3), fallback: Color("BackgroundPrompt").opacity(0.85))
 					.padding(.top, showKeyboard ? 100 : 0)
 					.frame(maxHeight: .infinity, alignment: showKeyboard ? .top : .center)
 					.allowsHitTesting(false)
 					.zIndex(3)
+			}
+
+			if quickActionsOpen {
+				// tap anywhere to fold the actions away again
+				Color.black.opacity(0.15)
+					.edgesIgnoringSafeArea(.all)
+					.onTapGesture { setQuickActions(open: false) }
+					.zIndex(4)
+			}
+
+			if settingsStore.showQuickActions && !hideOverlay {
+				quickActionsButton
+					.zIndex(5)
+			}
+
+			if showModePicker {
+				modePicker
+					.transition(.opacity.combined(with: .scale(scale: 0.96)))
+					.zIndex(6)
 			}
 
 			HStack(alignment: .top, spacing: 0) {
@@ -425,9 +454,8 @@ struct ParsecView: View {
 									.resizable()
 									.aspectRatio(contentMode: .fit)
 									.frame(width: 48, height: 48)
-									.background(Rectangle().fill(Color("BackgroundPrompt").opacity(showMenu ? 0.75 : 1)))
-									.cornerRadius(8)
-									.opacity(showMenu ? 1 : 0.25)
+									.liquidGlass(in: glassRounded(8, glass: 16), interactive: true, fallback: Color("BackgroundPrompt").opacity(showMenu ? 0.75 : 1))
+									.opacity(showMenu ? 1 : (supportsLiquidGlass ? 0.45 : 0.25))
 							}
 							.padding()
 							.edgesIgnoringSafeArea(.all)
@@ -443,8 +471,7 @@ struct ParsecView: View {
 									.frame(width: 32, height: 32)
 									.foregroundColor(Color("Foreground"))
 									.padding(8)
-									.background(Rectangle().fill(Color("BackgroundPrompt").opacity(showKeyboard ? 0.75 : 0.5)))
-									.cornerRadius(8)
+									.liquidGlass(in: glassRounded(8, glass: 16), interactive: true, tint: showKeyboard ? Color("AccentColor").opacity(0.5) : nil, fallback: Color("BackgroundPrompt").opacity(showKeyboard ? 0.75 : 0.5))
 							}
 							.padding(.leading)
 							.edgesIgnoringSafeArea(.all)
@@ -603,8 +630,8 @@ struct ParsecView: View {
 							.frame(maxWidth: .infinity)
 							.multilineTextAlignment(.center)
 					}
-					Button(action: toggleTouchMode) {
-						Text("Touch Mode: \(settingsStore.cursorMode == .direct ? "Direct" : "Touchpad")")
+					Button(action: openModePicker) {
+						Text("Touch Input: \(settingsStore.cursorMode.title)")
 							.padding(8)
 							.frame(maxWidth: .infinity)
 							.multilineTextAlignment(.center)
@@ -634,12 +661,196 @@ struct ParsecView: View {
 					.multilineTextAlignment(.center)
 			}
 		}
-		.background(Rectangle().fill(Color("BackgroundPrompt").opacity(0.75)))
+		.liquidGlass(in: glassRounded(8, glass: 22), fallback: Color("BackgroundPrompt").opacity(0.75))
 		.foregroundColor(Color("Foreground"))
 		.frame(maxWidth: menuWidth)
-		.cornerRadius(8)
 		.padding(.horizontal)
 		// .edgesIgnoringSafeArea(.all)
+	}
+
+	// MARK: - Quick actions
+	// A floating button in the bottom corner that fans out into the controls you reach for most
+	// while driving a PC from a phone, one tap each, no menu digging.
+
+	var quickActions: [QuickAction] {
+		let mode = settingsStore.cursorMode
+		var list = [
+			QuickAction(id: "keyboard", icon: "keyboard", label: showKeyboard ? "Hide Keyboard" : "Keyboard", run: toggleKeyboard),
+			QuickAction(id: "mode", icon: mode.icon, label: "Touch Input: \(mode.shortTitle)", run: openModePicker),
+			QuickAction(id: "cad", icon: "lock.shield", label: "Ctrl+Alt+Del", run: { parsecViewController.sendKeyCombo("CONTROL+LALT+DELETE") }),
+			QuickAction(id: "start", icon: "square.grid.2x2", label: "Start Menu", run: { parsecViewController.sendKeyCombo("LGUI") }),
+			// asks the host to switch to this phone's screen size, so the desktop fills it edge to edge
+			QuickAction(id: "resize", icon: "arrow.up.left.and.arrow.down.right", label: "Resize Desktop to Fit", run: { changeResolution(res: .client) })
+		]
+		// only the modes that can zoom the picture need a way back to the whole desktop
+		if (mode == .touchpad && zoomEnabled) || mode == .twoFingerPanZoom || mode == .threeFingerPanZoom {
+			list.append(QuickAction(id: "fit", icon: "arrow.down.right.and.arrow.up.left", label: "Fit to Screen", run: { parsecViewController.resetZoom() }))
+		}
+		list.append(QuickAction(id: "menu", icon: "list.bullet", label: "Stream Menu", run: {
+			showMenu = true
+			ParsecView.getHostUserData()
+		}))
+		list.append(QuickAction(id: "disconnect", icon: "power", label: "Disconnect", destructive: true, run: { disconnect() }))
+		return list
+	}
+
+	func setQuickActions(open: Bool) {
+		withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+			quickActionsOpen = open
+		}
+	}
+
+	var quickActionsButton: some View {
+		GeometryReader { proxy in
+			VStack(alignment: .trailing, spacing: 10) {
+				if quickActionsOpen {
+					ForEach(quickActions) { action in
+						Button(action: {
+							setQuickActions(open: false)
+							action.run()
+						}) {
+							HStack(spacing: 8) {
+								Text(action.label)
+									.foregroundColor(action.destructive ? .red : Color("Foreground"))
+									.font(.system(size: 13, weight: .medium))
+									.lineLimit(1)
+									.padding(.horizontal, 10)
+									.padding(.vertical, 6)
+									.liquidGlass(in: Capsule(), fallback: Color("BackgroundPrompt").opacity(0.85))
+								Image(systemName: action.icon)
+									.font(.system(size: 18, weight: .medium))
+									.foregroundColor(action.destructive ? .red : Color("Foreground"))
+									.frame(width: 44, height: 44)
+									.liquidGlass(in: Circle(), interactive: true, fallback: Color("BackgroundPrompt").opacity(0.85))
+							}
+						}
+						.accessibilityLabel(Text(action.label))
+						.transition(.move(edge: .bottom).combined(with: .opacity))
+					}
+				}
+				Button(action: { setQuickActions(open: !quickActionsOpen) }) {
+					Image(systemName: quickActionsOpen ? "xmark" : "ellipsis")
+						.font(.system(size: 20, weight: .semibold))
+						.frame(width: 52, height: 52)
+						.liquidGlass(in: Circle(), interactive: true, tint: quickActionsOpen ? Color("AccentColor").opacity(0.6) : nil, fallback: Color("BackgroundPrompt").opacity(0.85))
+						.opacity(quickActionsOpen ? 1 : (supportsLiquidGlass ? 0.6 : 0.45))
+				}
+				.accessibilityLabel(Text(quickActionsOpen ? "Close quick actions" : "Quick actions"))
+			}
+			.foregroundColor(Color("Foreground"))
+			// the stream ignores the safe area, the button must not sit under the home bar or notch
+			.padding(.trailing, proxy.safeAreaInsets.trailing + 16)
+			.padding(.bottom, max(proxy.safeAreaInsets.bottom, 12) + 12)
+			.frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomTrailing)
+		}
+	}
+
+	// MARK: - Touch input chooser
+	// The four ways to drive the PC, the same set Chrome Remote Desktop has, each with what it does
+	// so you can pick without trying them all.
+
+	func openModePicker() {
+		showMenu = false
+		withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) { showModePicker = true }
+	}
+
+	func closeModePicker() {
+		withAnimation(.easeOut(duration: 0.2)) { showModePicker = false }
+	}
+
+	func setCursorMode(_ mode: CursorMode) {
+		closeModePicker()
+		guard SettingsHandler.cursorMode != mode else { return }
+		SettingsHandler.cursorMode = mode
+		parsecViewController.applyCursorMode()
+		UISelectionFeedbackGenerator().selectionChanged()
+		withAnimation { hint = mode.title }
+		DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+			if hint == mode.title { withAnimation { hint = nil } }
+		}
+	}
+
+	var modePicker: some View {
+		ZStack {
+			Color.black.opacity(0.35)
+				.edgesIgnoringSafeArea(.all)
+				.onTapGesture(perform: closeModePicker)
+			VStack(spacing: 0) {
+				HStack(spacing: 10) {
+					Image(systemName: "hand.point.up.left.fill")
+						.font(.system(size: 15, weight: .semibold))
+						.foregroundColor(Color("AccentColor"))
+					Text("Touch Input")
+						.font(.system(size: 17, weight: .semibold))
+					Spacer()
+					Button(action: closeModePicker) {
+						Image(systemName: "xmark")
+							.font(.system(size: 13, weight: .bold))
+							.frame(width: 30, height: 30)
+							.liquidGlass(in: Circle(), interactive: true, fallback: Color("Foreground").opacity(0.1))
+					}
+					.accessibilityLabel(Text("Close"))
+				}
+				.padding(.horizontal, 16)
+				.padding(.top, 14)
+				.padding(.bottom, 10)
+				ScrollView {
+					VStack(spacing: 8) {
+						ForEach(CursorMode.allCases, id: \.self) { mode in
+							modeRow(mode)
+						}
+					}
+					.padding(.horizontal, 10)
+					.padding(.bottom, 10)
+					.background(GeometryReader { proxy in
+						Color.clear.preference(key: MenuRowsHeightKey.self, value: proxy.size.height)
+					})
+				}
+				.frame(maxHeight: modeRowsHeight)
+				.onPreferenceChange(MenuRowsHeightKey.self) { modeRowsHeight = $0 }
+			}
+			.foregroundColor(Color("Foreground"))
+			.liquidGlass(in: glassRounded(14, glass: 28), fallback: Color("BackgroundPrompt").opacity(0.95))
+			.frame(maxWidth: 460)
+			.padding(.horizontal, 16)
+			.padding(.vertical, 20)
+		}
+	}
+
+	func modeRow(_ mode: CursorMode) -> some View {
+		let selected = settingsStore.cursorMode == mode
+		let accent = Color("AccentColor")
+		return Button(action: { setCursorMode(mode) }) {
+			HStack(alignment: .center, spacing: 12) {
+				Image(systemName: mode.icon)
+					.font(.system(size: 18, weight: .medium))
+					.foregroundColor(selected ? .white : accent)
+					.frame(width: 42, height: 42)
+					.background(Circle().fill(selected ? accent : accent.opacity(0.15)))
+				VStack(alignment: .leading, spacing: 3) {
+					Text(mode.title)
+						.font(.system(size: 15, weight: .semibold))
+					Text(mode.summary)
+						.font(.system(size: 12))
+						.opacity(0.7)
+						.fixedSize(horizontal: false, vertical: true)
+				}
+				Spacer(minLength: 4)
+				Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+					.font(.system(size: 20))
+					.foregroundColor(selected ? accent : Color("Foreground").opacity(0.25))
+			}
+			.multilineTextAlignment(.leading)
+			.padding(12)
+			.background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+				.fill(selected ? accent.opacity(0.14) : Color("Foreground").opacity(0.05)))
+			.overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+				.stroke(selected ? accent.opacity(0.55) : Color.clear, lineWidth: 1.5))
+			.contentShape(Rectangle())
+		}
+		.buttonStyle(PlainButtonStyle())
+		.foregroundColor(Color("Foreground"))
+		.accessibilityAddTraits(selected ? AccessibilityTraits.isSelected : AccessibilityTraits())
 	}
 
 	var overlayTitle: String {
@@ -764,6 +975,7 @@ struct ParsecView: View {
 		pipAtOpen = SettingsHandler.enablePiP
 		resolutionAtOpen = SettingsHandler.resolution
 		bitrateAtOpen = SettingsHandler.bitrate
+		cursorModeAtOpen = SettingsHandler.cursorMode
 		showMenu = false
 		if showKeyboard { toggleKeyboard() }
 		withAnimation(.easeInOut(duration: 0.24)) { showSettings = true }
@@ -772,6 +984,9 @@ struct ParsecView: View {
 	func applyStreamSettings() {
 		zoomEnabled = SettingsHandler.zoomEnabled
 		parsecViewController.setZoomEnabled(zoomEnabled)
+		if SettingsHandler.cursorMode != cursorModeAtOpen {
+			parsecViewController.applyCursorMode()
+		}
 		parsecViewController.updatePanHandle()
 		parsecViewController.positionCursorOverlay()
 		hideOverlay = SettingsHandler.noOverlay
@@ -828,7 +1043,7 @@ struct ParsecView: View {
 		guard menu || keyboard else { return }
 		if menu { menuSwipeHintShown = true }
 		if keyboard { keyboardHintShown = true }
-		let text = [menu ? "Swipe from the left edge for the menu" : nil, keyboard ? "Tap with three fingers to show or hide the keyboard" : nil].compactMap { $0 }.joined(separator: "\n")
+		let text = [menu ? "Swipe from the left edge for the menu" : nil, keyboard ? "Swipe up with three fingers for the keyboard, down to hide it" : nil].compactMap { $0 }.joined(separator: "\n")
 		withAnimation { hint = text }
 		DispatchQueue.main.asyncAfter(deadline: .now() + (menu && keyboard ? 6 : 4)) {
 			withAnimation { hint = nil }
@@ -938,13 +1153,6 @@ struct ParsecView: View {
 			zoomEnabled.toggle()
 			parsecViewController.setZoomEnabled(zoomEnabled)
 			SettingsHandler.zoomEnabled = zoomEnabled
-		}
-	}
-
-	func toggleTouchMode() {
-		DispatchQueue.main.async {
-			SettingsHandler.cursorMode = SettingsHandler.cursorMode == .direct ? .touchpad : .direct
-			parsecViewController.updatePanHandle()
 		}
 	}
 

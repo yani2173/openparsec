@@ -16,6 +16,11 @@ final class SettingsStore: ObservableObject {
 			"mouseSensitivity": 1.0,
 			"pointerAcceleration": true,
 			"hapticFeedback": true,
+			"clickRipple": true,
+			// remote desktop style defaults: three fingers middle click, pinch always zooms
+			"threeFingerTap": ThreeFingerTapAction.middleClick.rawValue,
+			"twoFingerDrag": TwoFingerDrag.scroll.rawValue,
+			"showQuickActions": true,
 			"optionAsCommand": false,
 			"menuSwipeEdge": MenuSwipeEdge.off.rawValue,
 			"noOverlay": false,
@@ -32,7 +37,7 @@ final class SettingsStore: ObservableObject {
 			"errorPrompts": false,
 			"showConnectionLog": true,
 			"autoConnectOnLaunch": false,
-			"savedZoomEnabled": false,
+			"savedZoomEnabled": true,
 			"savedConstantFps": false
 		])
 		// values saved back when saving was off would now always apply
@@ -91,6 +96,26 @@ final class SettingsStore: ObservableObject {
 	var hapticFeedback: Bool {
 		get { defaults.bool(forKey: "hapticFeedback") }
 		set { store(newValue, "hapticFeedback") }
+	}
+
+	var clickRipple: Bool {
+		get { defaults.bool(forKey: "clickRipple") }
+		set { store(newValue, "clickRipple") }
+	}
+
+	var threeFingerTap: ThreeFingerTapAction {
+		get { ThreeFingerTapAction(rawValue: defaults.integer(forKey: "threeFingerTap")) ?? .keyboard }
+		set { store(newValue.rawValue, "threeFingerTap") }
+	}
+
+	var twoFingerDrag: TwoFingerDrag {
+		get { TwoFingerDrag(rawValue: defaults.integer(forKey: "twoFingerDrag")) ?? .scroll }
+		set { store(newValue.rawValue, "twoFingerDrag") }
+	}
+
+	var showQuickActions: Bool {
+		get { defaults.bool(forKey: "showQuickActions") }
+		set { store(newValue, "showQuickActions") }
 	}
 
 	var optionAsCommand: Bool {
@@ -194,6 +219,10 @@ struct SettingsHandler {
 	static var mouseSensitivity: Double { get { SettingsStore.shared.mouseSensitivity } set { SettingsStore.shared.mouseSensitivity = newValue } }
 	static var pointerAcceleration: Bool { get { SettingsStore.shared.pointerAcceleration } set { SettingsStore.shared.pointerAcceleration = newValue } }
 	static var hapticFeedback: Bool { get { SettingsStore.shared.hapticFeedback } set { SettingsStore.shared.hapticFeedback = newValue } }
+	static var clickRipple: Bool { get { SettingsStore.shared.clickRipple } set { SettingsStore.shared.clickRipple = newValue } }
+	static var threeFingerTap: ThreeFingerTapAction { get { SettingsStore.shared.threeFingerTap } set { SettingsStore.shared.threeFingerTap = newValue } }
+	static var twoFingerDrag: TwoFingerDrag { get { SettingsStore.shared.twoFingerDrag } set { SettingsStore.shared.twoFingerDrag = newValue } }
+	static var showQuickActions: Bool { get { SettingsStore.shared.showQuickActions } set { SettingsStore.shared.showQuickActions = newValue } }
 	static var optionAsCommand: Bool { get { SettingsStore.shared.optionAsCommand } set { SettingsStore.shared.optionAsCommand = newValue } }
 	static var menuSwipeEdge: MenuSwipeEdge { get { SettingsStore.shared.menuSwipeEdge } set { SettingsStore.shared.menuSwipeEdge = newValue } }
 	static var noOverlay: Bool { get { SettingsStore.shared.noOverlay } set { SettingsStore.shared.noOverlay = newValue } }

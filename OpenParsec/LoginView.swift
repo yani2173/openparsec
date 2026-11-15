@@ -52,14 +52,12 @@ struct LoginView: View {
 					.autocapitalization(/*@START_MENU_TOKEN@*/.none/*@END_MENU_TOKEN@*/)
 					.textContentType(.password)
 				Button(action: {authenticate()}) {
-					ZStack {
-						Rectangle()
-							.fill(Color("AccentColor"))
-							.cornerRadius(8)
-						Text("Login")
-							.foregroundColor(.white)
-					}
-					.frame(height: 54)
+					Text("Login")
+						.foregroundColor(.white)
+						.frame(maxWidth: .infinity)
+						.frame(height: 54)
+						.contentShape(Rectangle())
+						.liquidGlass(in: glassRounded(8, glass: 27), interactive: true, tint: Color("AccentColor"), fallback: Color("AccentColor"))
 				}
 			}
 
@@ -93,31 +91,26 @@ struct LoginView: View {
 								.textContentType(.oneTimeCode)
 							HStack {
 								Button(action: {presentTFAAlert = false}) {
-									ZStack {
-										Rectangle()
-											.fill(Color("BackgroundButton"))
-											.cornerRadius(8)
-										Text("Cancel")
-											.foregroundColor(Color("Foreground"))
-									}
-									.frame(height: 54)
+									Text("Cancel")
+										.foregroundColor(Color("Foreground"))
+										.frame(maxWidth: .infinity)
+										.frame(height: 54)
+										.contentShape(Rectangle())
+										.liquidGlass(in: glassRounded(8, glass: 27), interactive: true, fallback: Color("BackgroundButton"))
 								}
 								Button(action: {authenticate(inputTFA)}) {
-									ZStack {
-										Rectangle()
-											.fill(Color("AccentColor"))
-											.cornerRadius(8)
-										Text("Enter")
-											.foregroundColor(.white)
-									}
-									.frame(height: 54)
+									Text("Enter")
+										.foregroundColor(.white)
+										.frame(maxWidth: .infinity)
+										.frame(height: 54)
+										.contentShape(Rectangle())
+										.liquidGlass(in: glassRounded(8, glass: 27), interactive: true, tint: Color("AccentColor"), fallback: Color("AccentColor"))
 								}
 							}
 						}
 					}
 					.padding()
-					.background(Rectangle().fill(Color("BackgroundPrompt")))
-					.cornerRadius(8)
+					.liquidGlass(in: glassRounded(8, glass: 28), fallback: Color("BackgroundPrompt"))
 					.padding()
 				}
 			}

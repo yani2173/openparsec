@@ -53,358 +53,19 @@ struct MainView: View {
 		ZStack {
 			// Background
 			Rectangle()
-				.fill(Color("BackgroundTab"))
+				.fill(Color(supportsLiquidGlass ? "BackgroundGray" : "BackgroundTab"))
 				.edgesIgnoringSafeArea(.all)
-			Rectangle()
-				.fill(Color("BackgroundGray"))
-				.padding(.vertical, 52)
+			if !supportsLiquidGlass {
+				Rectangle()
+					.fill(Color("BackgroundGray"))
+					.padding(.vertical, 52)
+			}
 
 			// Main controls
-			VStack {
-				// Navigation controls
-				HStack {
-					Button(action: { showLogoutAlert = true }, label: { Image("SymbolExit").scaleEffect(x: -1) })
-						.padding()
-						.alert(isPresented: $showLogoutAlert) {
-							Alert(title: Text("Are you sure you want to logout?"), primaryButton: .destructive(Text("Logout"), action: logout), secondaryButton: .cancel(Text("Cancel")))
-						}
-//					Button(action: {
-//						if let c = controller
-//						{
-//							c.setView(.test)
-//
-//						}
-//						
-//					}, label: {
-//						Text("Show TestView")
-//					})
-
-					Spacer()
-					HStack {
-						if page == .hosts {
-							// Probably not the best solution for equal spacing, but I don't know how to do math properly in SwiftUI. Please send me an issue if you have a better solution.
-							Image(systemName: "arrow.clockwise")
-								.padding(4)
-								.opacity(0)
-
-							Text(hostCountStr)
-								.multilineTextAlignment(.center)
-								.foregroundColor(Color("Foreground"))
-								.font(.system(size: 20, weight: .medium))
-							Button(action: refreshHosts, label: { Image(systemName: "arrow.clockwise") })
-								.padding(4)
-								.disabled(isRefreshing)
-								.opacity(isRefreshing ? 0.4 : 1)
-						} else if page == .friends {
-							Text(friendCountStr)
-								.multilineTextAlignment(.center)
-								.foregroundColor(Color("Foreground"))
-								.font(.system(size: 20, weight: .medium))
-						}
-					}
-					Spacer()
-					Button(action: { withAnimation(.easeInOut(duration: 0.24)) { inSettings = true } }, label: { Image(systemName: "gear") })
-						.padding()
-				}
-				.foregroundColor(Color("AccentColor"))
-				.background(Color("BackgroundTab")
-					.frame(height: 52)
-					.shadow(color: Color("Shading"), radius: 4, y: 6)
-					.mask(Rectangle().frame(height: 80).offset(y: 50))
-				)
-				.zIndex(1)
-
-				ZStack {
-					// Hosts page
-					ScrollView(.vertical) {
-						VStack {
-							if sessionExpired {
-								HStack {
-									Text("Your Parsec session expired")
-										.foregroundColor(Color("Foreground"))
-									Spacer()
-									Button(action: logout) {
-										Text("Sign In")
-											.fontWeight(.semibold)
-											.foregroundColor(Color("AccentColor"))
-											.frame(minWidth: 44, minHeight: 44)
-											.contentShape(Rectangle())
-									}
-								}
-								.padding(.horizontal, 12)
-								.padding(.vertical, 2)
-								.background(Rectangle().fill(Color("BackgroundPrompt")))
-								.cornerRadius(8)
-								.frame(maxWidth: 400)
-								.padding(.horizontal)
-							}
-							if let refreshError = refreshError {
-								HStack {
-									Text(refreshError)
-										.foregroundColor(Color("Foreground"))
-									Spacer()
-									Button(action: refreshHosts) {
-										Text("Retry")
-											.fontWeight(.semibold)
-											.foregroundColor(Color("AccentColor"))
-											.frame(minWidth: 44, minHeight: 44)
-											.contentShape(Rectangle())
-									}
-								}
-								.padding(.horizontal, 12)
-								.padding(.vertical, 2)
-								.background(Rectangle().fill(Color("BackgroundPrompt")))
-								.cornerRadius(8)
-								.frame(maxWidth: 400)
-								.padding(.horizontal)
-							}
-							if isRefreshing {
-								HStack(spacing: 8) {
-									ActivityIndicator(isAnimating: $isRefreshing, style: .medium, tint: UIColor(named: "Foreground") ?? .white)
-										.frame(width: 20, height: 20)
-									Text("Refreshing hosts...")
-										.foregroundColor(Color("Foreground"))
-								}
-							} else if !refreshTime.isEmpty {
-								Text(refreshTime)
-									.multilineTextAlignment(.center)
-									.opacity(0.5)
-							}
-							if let lastHost = lastHostShown, !isConnecting {
-								VStack(spacing: 0) {
-									HStack {
-										VStack(alignment: .leading, spacing: 4) {
-											Text("Last connected")
-												.font(.system(size: 12))
-												.opacity(0.5)
-											Text(lastHost)
-												.font(.system(size: 16, weight: .medium))
-										}
-										Spacer()
-										Button(action: reconnectLastHost) {
-											Text("Reconnect")
-												.lineLimit(1)
-												.fixedSize()
-												.foregroundColor(.white)
-												.padding(.horizontal, 16)
-												.frame(minHeight: 44)
-												.background(Color("AccentColor"))
-												.cornerRadius(8)
-										}
-										Button(action: clearLastHost) {
-											Image(systemName: "xmark")
-												.foregroundColor(Color("Foreground"))
-												.opacity(0.5)
-												.frame(width: 44, height: 44)
-												.contentShape(Rectangle())
-										}
-									}
-									.padding()
-									HStack {
-										Toggle("Reconnect on app launch", isOn: Binding(
-											get: { SettingsHandler.autoConnectOnLaunch },
-											set: { SettingsHandler.autoConnectOnLaunch = $0 }
-										))
-										.font(.system(size: 13))
-										.opacity(0.7)
-									}
-									.padding(.horizontal)
-									.padding(.bottom, 10)
-								}
-								.frame(maxWidth: 400)
-								.background(Rectangle().fill(Color("BackgroundCard")))
-								.cornerRadius(8)
-							}
-							ForEach(hosts) { i in
-								ZStack {
-									VStack {
-										URLImage(url: URL(string: "https://parsecusercontent.com/cors-resize-image/w=64,h=64,fit=crop,background=white,q=90,f=jpeg/avatars/\(String(i.user.id))/avatar"),
-												output:
-												{
-													$0
-														.resizable()
-														.aspectRatio(contentMode: .fit)
-														.frame(width: 64, height: 64)
-														.cornerRadius(8)
-												},
-												placeholder:
-												{
-													Image("IconTransparent")
-														.resizable()
-														.aspectRatio(contentMode: .fit)
-														.frame(width: 64, height: 64)
-														.background(Rectangle().fill(Color("BackgroundPrompt")))
-														.cornerRadius(8)
-												})
-										Text(i.hostname)
-											.font(.system(size: 20, weight: .medium))
-											.multilineTextAlignment(.center)
-										Text("\(i.user.name)#\(String(i.user.id))")
-											.font(.system(size: 16, weight: .medium))
-											.multilineTextAlignment(.center)
-											.opacity(0.5)
-										Button(action: { connectTo(i) }) {
-											Text("Connect")
-												.lineLimit(1)
-												.fixedSize()
-												.foregroundColor(.white)
-												.padding(.horizontal, 28)
-												.frame(minHeight: 44)
-												.background(Color("AccentColor"))
-												.cornerRadius(8)
-										}
-									}
-
-									if i.connections > 0 {
-										VStack {
-											HStack {
-												Image(systemName: "person.fill")
-												Text(String(i.connections))
-													.font(.system(size: 16, weight: .medium))
-												Spacer()
-											}
-											Spacer()
-										}
-									}
-								}
-								.padding()
-								.frame(maxWidth: 400)
-								.background(Rectangle().fill(Color("BackgroundCard")))
-								.cornerRadius(8)
-								.contextMenu {
-									Button(action: { UIPasteboard.general.string = i.hostname }) {
-										Label("Copy Name", systemImage: "doc.on.doc")
-									}
-								}
-							}
-						}
-						.padding()
-					}
-					.zIndex(page == .hosts ? 0 : -1)
-					.disabled(page != .hosts)
-					.opacity(page == .hosts ? 1 : 0)
-
-					// Friends page
-					ScrollView(.vertical) {
-						VStack {
-							if let user = userInfo {
-								Text("You")
-									.multilineTextAlignment(.center)
-									.opacity(0.5)
-								HStack {
-									URLImage(url: URL(string: "https://parsecusercontent.com/cors-resize-image/w=48,h=48,fit=crop,background=white,q=90,f=jpeg/avatars/\(String(user.id))/avatar"),
-										output:
-										{
-											$0
-												.resizable()
-												.aspectRatio(contentMode: .fit)
-												.frame(width: 48, height: 48)
-												.cornerRadius(6)
-										},
-										placeholder:
-										{
-											Image("IconTransparent")
-												.resizable()
-												.aspectRatio(contentMode: .fit)
-												.frame(width: 48, height: 48)
-												.background(Rectangle().fill(Color("BackgroundPrompt")))
-												.cornerRadius(6)
-										})
-									Text("\(user.username)#\(String(user.id))")
-										.font(.system(size: 16, weight: .medium))
-										.multilineTextAlignment(.center)
-									Spacer()
-								}
-								.padding(8)
-								.background(Color("BackgroundCard"))
-								.cornerRadius(12)
-							}
-							if friends.count > 0 {
-								Text("Friends")
-									.multilineTextAlignment(.center)
-									.opacity(0.5)
-								ForEach(friends) { i in
-									HStack {
-										URLImage(url: URL(string: "https://parsecusercontent.com/cors-resize-image/w=48,h=48,fit=crop,background=white,q=90,f=jpeg/avatars/\(String(i.id))/avatar"),
-											output:
-											{
-												$0
-													.resizable()
-													.aspectRatio(contentMode: .fit)
-													.frame(width: 48, height: 48)
-													.cornerRadius(6)
-											},
-											placeholder:
-											{
-												Image("IconTransparent")
-													.resizable()
-													.aspectRatio(contentMode: .fit)
-													.frame(width: 48, height: 48)
-													.background(Rectangle().fill(Color("BackgroundPrompt")))
-													.cornerRadius(6)
-											})
-										Text("\(i.username)#\(String(i.id))")
-											.font(.system(size: 16, weight: .medium))
-											.multilineTextAlignment(.center)
-										Spacer()
-//										Button(action:{ }, label:{ Image(systemName:"ellipsis.circle.fill") })
-//											.font(.system(size:20))
-//											.foregroundColor(Color("AccentColor"))
-//											.padding(8)
-									}
-									.padding(8)
-									.background(Color("BackgroundCard"))
-									.cornerRadius(12)
-								}
-							}
-						}
-						.padding()
-					}
-					.zIndex(page == .friends ? 0 : -1)
-					.disabled(page != .friends)
-					.opacity(page == .friends ? 1 : 0)
-				}
-				.padding(.top, -8)
-				.frame(maxWidth: .infinity)
-				.alert(isPresented: $showBaseAlert) {
-					Alert(title: Text(baseAlertText))
-				}
-
-				// Page controls
-				HStack {
-					Spacer()
-					Button(action: { page = .hosts }, label:
-					{
-						VStack {
-							Image(systemName: "desktopcomputer")
-							Text("Hosts")
-						}
-					})
-					.foregroundColor(Color(page == .hosts ? "AccentColor" : "ForegroundInactive"))
-					.disabled(page == .hosts)
-					Spacer()
-					Button(action: { page = .friends }, label:
-					{
-						VStack {
-							Image(systemName: "person.2.fill")
-							Text("Friends")
-						}
-					})
-					.foregroundColor(Color(page == .friends ? "AccentColor" : "ForegroundInactive"))
-					.disabled(page == .friends)
-					Spacer()
-				}
-				.padding([.leading, .bottom, .trailing], 4)
-				.background(Color("BackgroundTab")
-					.padding(.top, -8)
-					.shadow(color: Color("Shading"), radius: 4, y: -2)
-					.mask(Rectangle().frame(height: 80).offset(y: -50))
-				)
-				.zIndex(1)
-			}
-			.onAppear(perform: initView)
-			.onDisappear { ParsecBackgroundManager.shared.onShortcutReconnect = nil }
-			.disabled(busy) // disable view if busy
+			mainLayout
+				.onAppear(perform: initView)
+				.onDisappear { ParsecBackgroundManager.shared.onShortcutReconnect = nil }
+				.disabled(busy) // disable view if busy
 
 			// Settings screen
 			SettingsView(visible: $inSettings)
@@ -424,8 +85,7 @@ struct MainView: View {
 							.foregroundColor(.white)
 							.padding(.horizontal, 20)
 							.frame(minHeight: 44)
-							.background(Color.white.opacity(0.2))
-							.cornerRadius(8)
+							.liquidGlass(in: glassRounded(8, glass: 22), interactive: true, fallback: Color.white.opacity(0.2))
 					}
 					.padding(.top, 4)
 					if SettingsHandler.showConnectionLog {
@@ -438,6 +98,423 @@ struct MainView: View {
 		}
 		.foregroundColor(Color("Foreground"))
 	}
+
+	// MARK: - Layout
+
+	var navBar: some View {
+		HStack {
+			Button(action: { showLogoutAlert = true }, label: {
+				Image("SymbolExit")
+					.scaleEffect(x: -1)
+					.frame(width: 40, height: 40)
+					.liquidGlass(in: Circle(), interactive: true, fallback: .clear)
+			})
+				.padding(.horizontal, 8)
+				.alert(isPresented: $showLogoutAlert) {
+					Alert(title: Text("Are you sure you want to logout?"), primaryButton: .destructive(Text("Logout"), action: logout), secondaryButton: .cancel(Text("Cancel")))
+				}
+//					Button(action: {
+//						if let c = controller
+//						{
+//							c.setView(.test)
+//
+//						}
+//						
+//					}, label: {
+//						Text("Show TestView")
+//					})
+
+			Spacer()
+			HStack {
+				if page == .hosts {
+					// Probably not the best solution for equal spacing, but I don't know how to do math properly in SwiftUI. Please send me an issue if you have a better solution.
+					Image(systemName: "arrow.clockwise")
+						.padding(4)
+						.opacity(0)
+
+					Text(hostCountStr)
+						.multilineTextAlignment(.center)
+						.foregroundColor(Color("Foreground"))
+						.font(.system(size: 20, weight: .medium))
+					Button(action: refreshHosts, label: { Image(systemName: "arrow.clockwise") })
+						.padding(4)
+						.disabled(isRefreshing)
+						.opacity(isRefreshing ? 0.4 : 1)
+				} else if page == .friends {
+					Text(friendCountStr)
+						.multilineTextAlignment(.center)
+						.foregroundColor(Color("Foreground"))
+						.font(.system(size: 20, weight: .medium))
+				}
+			}
+			Spacer()
+			Button(action: { withAnimation(.easeInOut(duration: 0.24)) { inSettings = true } }, label: {
+				Image(systemName: "gear")
+					.frame(width: 40, height: 40)
+					.liquidGlass(in: Circle(), interactive: true, fallback: .clear)
+			})
+				.padding(.horizontal, 8)
+		}
+		.foregroundColor(Color("AccentColor"))
+	}
+
+	var pages: some View {
+		ZStack {
+			// Hosts page
+			ScrollView(.vertical) {
+				VStack {
+					if sessionExpired {
+						HStack {
+							Text("Your Parsec session expired")
+								.foregroundColor(Color("Foreground"))
+							Spacer()
+							Button(action: logout) {
+								Text("Sign In")
+									.fontWeight(.semibold)
+									.foregroundColor(Color("AccentColor"))
+									.frame(minWidth: 44, minHeight: 44)
+									.contentShape(Rectangle())
+							}
+						}
+						.padding(.horizontal, 12)
+						.padding(.vertical, 2)
+						.background(Rectangle().fill(Color("BackgroundPrompt")))
+						.cornerRadius(8)
+						.frame(maxWidth: 400)
+						.padding(.horizontal)
+					}
+					if let refreshError = refreshError {
+						HStack {
+							Text(refreshError)
+								.foregroundColor(Color("Foreground"))
+							Spacer()
+							Button(action: refreshHosts) {
+								Text("Retry")
+									.fontWeight(.semibold)
+									.foregroundColor(Color("AccentColor"))
+									.frame(minWidth: 44, minHeight: 44)
+									.contentShape(Rectangle())
+							}
+						}
+						.padding(.horizontal, 12)
+						.padding(.vertical, 2)
+						.background(Rectangle().fill(Color("BackgroundPrompt")))
+						.cornerRadius(8)
+						.frame(maxWidth: 400)
+						.padding(.horizontal)
+					}
+					if isRefreshing {
+						HStack(spacing: 8) {
+							ActivityIndicator(isAnimating: $isRefreshing, style: .medium, tint: UIColor(named: "Foreground") ?? .white)
+								.frame(width: 20, height: 20)
+							Text("Refreshing hosts...")
+								.foregroundColor(Color("Foreground"))
+						}
+					} else if !refreshTime.isEmpty {
+						Text(refreshTime)
+							.multilineTextAlignment(.center)
+							.opacity(0.5)
+					}
+					if let lastHost = lastHostShown, !isConnecting {
+						VStack(spacing: 0) {
+							HStack {
+								VStack(alignment: .leading, spacing: 4) {
+									Text("Last connected")
+										.font(.system(size: 12))
+										.opacity(0.5)
+									Text(lastHost)
+										.font(.system(size: 16, weight: .medium))
+								}
+								Spacer()
+								Button(action: reconnectLastHost) {
+									Text("Reconnect")
+										.lineLimit(1)
+										.fixedSize()
+										.foregroundColor(.white)
+										.padding(.horizontal, 16)
+										.frame(minHeight: 44)
+										.liquidGlass(in: glassRounded(8, glass: 22), interactive: true, tint: Color("AccentColor"), fallback: Color("AccentColor"))
+								}
+								Button(action: clearLastHost) {
+									Image(systemName: "xmark")
+										.foregroundColor(Color("Foreground"))
+										.opacity(0.5)
+										.frame(width: 44, height: 44)
+										.contentShape(Rectangle())
+								}
+							}
+							.padding()
+							HStack {
+								Toggle("Reconnect on app launch", isOn: Binding(
+									get: { SettingsHandler.autoConnectOnLaunch },
+									set: { SettingsHandler.autoConnectOnLaunch = $0 }
+								))
+								.font(.system(size: 13))
+								.opacity(0.7)
+							}
+							.padding(.horizontal)
+							.padding(.bottom, 10)
+						}
+						.frame(maxWidth: 440)
+						.background(glassRounded(12, glass: 24).fill(Color("BackgroundCard")))
+					}
+					if hosts.isEmpty && !isRefreshing && refreshError == nil && !refreshTime.isEmpty {
+						VStack(spacing: 10) {
+							Image(systemName: "desktopcomputer")
+								.font(.system(size: 40, weight: .light))
+								.foregroundColor(Color("AccentColor"))
+							Text("No computers yet")
+								.font(.system(size: 18, weight: .semibold))
+							Text("Turn on hosting in Parsec on your PC and sign in with this account, then refresh.")
+								.font(.system(size: 14))
+								.multilineTextAlignment(.center)
+								.opacity(0.6)
+								.fixedSize(horizontal: false, vertical: true)
+						}
+						.padding(24)
+						.frame(maxWidth: 400)
+					}
+					LazyVGrid(columns: [GridItem(.adaptive(minimum: 300, maximum: 440), spacing: 14)], spacing: 14) {
+						ForEach(hosts) { i in
+							hostCard(i)
+						}
+					}
+				}
+				.padding()
+			}
+			.zIndex(page == .hosts ? 0 : -1)
+			.disabled(page != .hosts)
+			.opacity(page == .hosts ? 1 : 0)
+
+			// Friends page
+			ScrollView(.vertical) {
+				VStack {
+					if let user = userInfo {
+						Text("You")
+							.multilineTextAlignment(.center)
+							.opacity(0.5)
+						HStack {
+							URLImage(url: URL(string: "https://parsecusercontent.com/cors-resize-image/w=48,h=48,fit=crop,background=white,q=90,f=jpeg/avatars/\(String(user.id))/avatar"),
+								output:
+								{
+									$0
+										.resizable()
+										.aspectRatio(contentMode: .fit)
+										.frame(width: 48, height: 48)
+										.cornerRadius(6)
+								},
+								placeholder:
+								{
+									Image("IconTransparent")
+										.resizable()
+										.aspectRatio(contentMode: .fit)
+										.frame(width: 48, height: 48)
+										.background(Rectangle().fill(Color("BackgroundPrompt")))
+										.cornerRadius(6)
+								})
+							Text("\(user.username)#\(String(user.id))")
+								.font(.system(size: 16, weight: .medium))
+								.multilineTextAlignment(.center)
+							Spacer()
+						}
+						.padding(10)
+						.background(glassRounded(12, glass: 20).fill(Color("BackgroundCard")))
+					}
+					if friends.count > 0 {
+						Text("Friends")
+							.multilineTextAlignment(.center)
+							.opacity(0.5)
+						ForEach(friends) { i in
+							HStack {
+								URLImage(url: URL(string: "https://parsecusercontent.com/cors-resize-image/w=48,h=48,fit=crop,background=white,q=90,f=jpeg/avatars/\(String(i.id))/avatar"),
+									output:
+									{
+										$0
+											.resizable()
+											.aspectRatio(contentMode: .fit)
+											.frame(width: 48, height: 48)
+											.cornerRadius(6)
+									},
+									placeholder:
+									{
+										Image("IconTransparent")
+											.resizable()
+											.aspectRatio(contentMode: .fit)
+											.frame(width: 48, height: 48)
+											.background(Rectangle().fill(Color("BackgroundPrompt")))
+											.cornerRadius(6)
+									})
+								Text("\(i.username)#\(String(i.id))")
+									.font(.system(size: 16, weight: .medium))
+									.multilineTextAlignment(.center)
+								Spacer()
+//										Button(action:{ }, label:{ Image(systemName:"ellipsis.circle.fill") })
+//											.font(.system(size:20))
+//											.foregroundColor(Color("AccentColor"))
+//											.padding(8)
+							}
+							.padding(10)
+							.background(glassRounded(12, glass: 20).fill(Color("BackgroundCard")))
+						}
+					}
+				}
+				.padding()
+			}
+			.zIndex(page == .friends ? 0 : -1)
+			.disabled(page != .friends)
+			.opacity(page == .friends ? 1 : 0)
+		}
+		.frame(maxWidth: .infinity)
+		.alert(isPresented: $showBaseAlert) {
+			Alert(title: Text(baseAlertText))
+		}
+	}
+
+	// One computer: avatar, name and owner on the left, who's on it and Connect on the right.
+	func hostCard(_ i: IdentifiableHostInfo) -> some View {
+		HStack(spacing: 14) {
+			URLImage(url: URL(string: "https://parsecusercontent.com/cors-resize-image/w=112,h=112,fit=crop,background=white,q=90,f=jpeg/avatars/\(String(i.user.id))/avatar"),
+					output:
+					{
+						$0
+							.resizable()
+							.aspectRatio(contentMode: .fill)
+							.frame(width: 56, height: 56)
+							.clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+					},
+					placeholder:
+					{
+						Image("IconTransparent")
+							.resizable()
+							.aspectRatio(contentMode: .fit)
+							.padding(6)
+							.frame(width: 56, height: 56)
+							.background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color("BackgroundPrompt")))
+					})
+			VStack(alignment: .leading, spacing: 4) {
+				Text(i.hostname)
+					.font(.system(size: 17, weight: .semibold))
+					.lineLimit(1)
+				Text("\(i.user.name)#\(String(i.user.id))")
+					.font(.system(size: 13))
+					.lineLimit(1)
+					.opacity(0.55)
+				HStack(spacing: 5) {
+					Circle()
+						.fill(i.connections > 0 ? Color.orange : Color.green)
+						.frame(width: 7, height: 7)
+					Text(i.connections > 0 ? "\(i.connections) connected" : "Available")
+						.font(.system(size: 12, weight: .medium))
+						.opacity(0.75)
+				}
+			}
+			Spacer(minLength: 4)
+			Button(action: { connectTo(i) }) {
+				Text("Connect")
+					.font(.system(size: 15, weight: .semibold))
+					.lineLimit(1)
+					.fixedSize()
+					.foregroundColor(.white)
+					.padding(.horizontal, 18)
+					.frame(minHeight: 40)
+					.liquidGlass(in: Capsule(), interactive: true, tint: Color("AccentColor"), fallback: Color("AccentColor"))
+			}
+			.accessibilityLabel(Text("Connect to \(i.hostname)"))
+		}
+		.padding(14)
+		.frame(maxWidth: 440)
+		.background(glassRounded(12, glass: 24).fill(Color("BackgroundCard")))
+		.contentShape(Rectangle())
+		.contextMenu {
+			Button(action: { connectTo(i) }) {
+				Label("Connect", systemImage: "play.fill")
+			}
+			Button(action: { UIPasteboard.general.string = i.hostname }) {
+				Label("Copy Name", systemImage: "doc.on.doc")
+			}
+		}
+	}
+
+	var tabBar: some View {
+		HStack {
+			Spacer()
+			Button(action: { page = .hosts }, label:
+			{
+				VStack {
+					Image(systemName: "desktopcomputer")
+					Text("Hosts")
+				}
+			})
+			.foregroundColor(Color(page == .hosts ? "AccentColor" : "ForegroundInactive"))
+			.disabled(page == .hosts)
+			Spacer()
+			Button(action: { page = .friends }, label:
+			{
+				VStack {
+					Image(systemName: "person.2.fill")
+					Text("Friends")
+				}
+			})
+			.foregroundColor(Color(page == .friends ? "AccentColor" : "ForegroundInactive"))
+			.disabled(page == .friends)
+			Spacer()
+		}
+	}
+
+	// flat bars with a drop shadow, the look before iOS 26
+	var classicLayout: some View {
+		VStack {
+			navBar
+				.background(Color("BackgroundTab")
+					.frame(height: 52)
+					.shadow(color: Color("Shading"), radius: 4, y: 6)
+					.mask(Rectangle().frame(height: 80).offset(y: 50))
+				)
+				.zIndex(1)
+
+			pages
+				.padding(.top, -8)
+
+			tabBar
+				.padding([.leading, .bottom, .trailing], 4)
+				.background(Color("BackgroundTab")
+					.padding(.top, -8)
+					.shadow(color: Color("Shading"), radius: 4, y: -2)
+					.mask(Rectangle().frame(height: 80).offset(y: -50))
+				)
+				.zIndex(1)
+		}
+	}
+
+	#if compiler(>=6.2)
+	// iOS 26+: the lists scroll underneath floating Liquid Glass bars, and safeAreaBar gives them
+	// the system scroll edge effect so the title stays readable over the content
+	@available(iOS 26.0, *)
+	var glassLayout: some View {
+		pages
+			.safeAreaBar(edge: .top, spacing: 0) {
+				navBar
+			}
+			.safeAreaBar(edge: .bottom, spacing: 0) {
+				tabBar
+					.padding(.horizontal, 28)
+					.padding(.vertical, 8)
+					.frame(maxWidth: 340)
+					.liquidGlass(in: Capsule(), fallback: Color("BackgroundTab"))
+					.padding(.bottom, 4)
+			}
+	}
+
+	@ViewBuilder var mainLayout: some View {
+		if #available(iOS 26.0, *) {
+			glassLayout
+		} else {
+			classicLayout
+		}
+	}
+	#else
+	var mainLayout: some View { classicLayout }
+	#endif
 
 	func initView() {
 		lastHostShown = ParsecBackgroundManager.shared.lastPeerId != nil ? ParsecBackgroundManager.shared.lastHostname : nil

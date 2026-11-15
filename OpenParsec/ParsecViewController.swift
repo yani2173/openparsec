@@ -71,7 +71,30 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 	var activeTouches: [UITouch] = []   // ordered; first two drive pinch / scroll
 	var touchOrigins: [UITouch: CGPoint] = [:]   // begin location per touch, for ghost-sweep movement test
 
-	enum TwoFingerMode { case undecided, zoom, scroll }
+	enum TwoFingerMode { case undecided, zoom, scroll, pan, appZoom }
+	var multiFingerResidual = false     // fingers left after a three-finger gesture; inert until full lift
+	var appZoomCtrlHeld = false         // Ctrl held down for a Windows pinch zoom (Ctrl + wheel)
+	var appZoomAccum: CGFloat = 0
+
+	// One finger in the Windows-style touch modes (Direct, Two-Finger, Three-Finger), decided as the
+	// finger moves: a tap clicks, a drag scrolls, a hold right clicks, a hold then drag drags.
+	enum TouchPhase { case idle, pending, scrolling, holdArmed, dragging }
+	var touchPhase: TouchPhase = .idle
+	var touchHoldTimer: Timer?
+	var touchStartContent: CGPoint = .zero
+	var touchEmulatedThisTouch = false
+	var lastTapTime: CFTimeInterval = 0
+	var lastTapScreen: CGPoint = .zero
+	var lastTapContent: CGPoint = .zero
+	let doubleTapWindow: CFTimeInterval = 0.4
+	let doubleTapSlop: CGFloat = 28
+
+	// press and hold: a grey circle fills in under the cursor, when it's full the left button is
+	// held so the next movement drags (like a remote desktop app on a phone)
+	var holdIndicator: CAShapeLayer?
+	let holdToDragDuration: TimeInterval = 0.5
+	let holdIndicatorDelay: TimeInterval = 0.12
+	let holdMoveSlop: CGFloat = 12
 	var twoFingerMode: TwoFingerMode = .undecided
 	var startPinchDistance: CGFloat = 0
 	var lastPinchDistance: CGFloat = 0
@@ -103,6 +126,12 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 
 	override var prefersHomeIndicatorAutoHidden: Bool {
 		return true
+	}
+
+	// we're a text input while the keyboard is up, so iOS would otherwise grab three-finger swipes
+	// and pinches for its own undo / copy / paste gestures
+	override var editingInteractionConfiguration: UIEditingInteractionConfiguration {
+		return .none
 	}
 
 	init() {
@@ -189,13 +218,14 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 			// input-driven). When idle, follow the host's reported cursor so host- or keyboard-
 			// driven moves are reflected and any prediction drift is corrected.
 			if !isDragging && !clickHoldActive && !cursorMomentumActive {
-				let fingerSet = SettingsHandler.cursorMode == .direct
+				let fingerSet = SettingsHandler.cursorMode.isTouch
 					&& abs(cursorContentPos.x - CGFloat(currentMouseX)) < 1
 					&& abs(cursorContentPos.y - CGFloat(currentMouseY)) < 1
 				cursorContentPos = CGPoint(x: CGFloat(currentMouseX), y: CGFloat(currentMouseY))
 				positionCursorOverlay()
 				if scrollView.zoomScale > 1.0 {
-					if !fingerSet {
+					// in the touch modes the view only moves when you move it
+					if !fingerSet && !SettingsHandler.cursorMode.isTouch {
 						centerViewportOnCursorPos()
 						positionCursorOverlay()
 					}
@@ -314,10 +344,23 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 		let longPressGestureRecognizer = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
 		longPressGestureRecognizer.numberOfTouchesRequired = 1
 		longPressGestureRecognizer.allowedTouchTypes = [0, 2]
-		longPressGestureRecognizer.allowableMovement = 40
+		longPressGestureRecognizer.minimumPressDuration = holdToDragDuration
+		// the finger has to stay put (same slop the grey circle uses) or it's a cursor move
+		longPressGestureRecognizer.allowableMovement = holdMoveSlop
 		// Don't cancel the overlay's touch, so the click-hold button can be released on lift.
 		longPressGestureRecognizer.cancelsTouchesInView = false
 		view.addGestureRecognizer(longPressGestureRecognizer)
+
+		// three-finger swipe up shows the keyboard, down hides it (or brings up the menu)
+		let swipeDirections: [UISwipeGestureRecognizer.Direction] = [.up, .down]
+		for direction in swipeDirections {
+			let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleThreeFingerSwipe(_:)))
+			swipe.direction = direction
+			swipe.numberOfTouchesRequired = 3
+			swipe.cancelsTouchesInView = false
+			swipe.delaysTouchesEnded = false
+			view.addGestureRecognizer(swipe)
+		}
 
 		menuEdgeSwipe = addMenuEdgeSwipe(.left)
 		menuEdgeSwipeRight = addMenuEdgeSwipe(.right)
@@ -562,10 +605,10 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 			}
 			keyboardCoversPicture = height > 0
 			updatePanHandle()
-			if height > 0 && SettingsHandler.cursorMode == .direct {
+			if height > 0 && SettingsHandler.cursorMode.isTouch {
 				onKeyboardCoversPicture?()
 			}
-			if SettingsHandler.cursorMode == .direct {
+			if SettingsHandler.cursorMode.isTouch {
 				let bottomY = max(0, scrollView.contentSize.height - scrollView.bounds.height + height)
 				scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: bottomY), animated: true)
 				onKeyboardVisibilityChanged?(true)
@@ -602,7 +645,7 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 	}
 
 	func updatePanHandle() {
-		setPanHandleVisible(keyboardCoversPicture && SettingsHandler.cursorMode == .direct)
+		setPanHandleVisible(keyboardCoversPicture && SettingsHandler.cursorMode.isTouch)
 	}
 
 	func setPanHandleVisible(_ visible: Bool) {
@@ -762,15 +805,18 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 	}
 
 	private func handleTouchCountChange(old: Int, new: Int) {
+		cancelHoldIndicator()
 		edgeScrollActive = false
 		if new > old { stopMomentum() }   // any new finger cancels an in-progress glide
 		if new == 0 {
 			let flingCursor = (old == 1) && isDragging && !twoFingerResidual && !clickHoldActive
-			let flingScroll = (old >= 2) && (twoFingerMode == .scroll)
+			let flingScroll = ((old >= 2) && (twoFingerMode == .scroll)) || ((old == 1) && touchPhase == .scrolling)
 			releaseClickHoldIfNeeded()   // defensive: the left button must never stay stuck down
-			endCursorIfNeeded()
+			endCursorIfNeeded(lifted: true)
+			endMultiFinger()
 			isDragging = false
 			twoFingerResidual = false
+			multiFingerResidual = false
 			twoFingerMode = .undecided
 			if flingCursor { startCursorMomentum() }
 			if flingScroll { startScrollMomentum() }
@@ -779,6 +825,7 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 				// Leftover finger after a two-finger gesture: stay inert until full lift so it
 				// doesn't jump the cursor.
 				if twoFingerMode == .scroll { startScrollMomentum() }
+				endMultiFinger()
 				twoFingerResidual = true
 				twoFingerMode = .undecided
 			} else if old == 0 {
@@ -786,8 +833,16 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 			}
 		} else if new >= 2 {
 			releaseClickHoldIfNeeded()   // can't keep the button held during a two-finger gesture
-			if isDragging { endCursorIfNeeded(); isDragging = false }
-			beginTwoFinger()
+			if isDragging { endCursorIfNeeded(lifted: false); isDragging = false }
+			endMultiFinger()
+			if new < old {
+				// a finger left a three-finger gesture: the rest stay inert until everything lifts
+				multiFingerResidual = true
+				twoFingerMode = .undecided
+			} else {
+				multiFingerResidual = false
+				beginTwoFinger()
+			}
 		}
 	}
 
@@ -802,13 +857,25 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 
 	// Drop all touch state and release any held button so nothing sticks when backgrounded.
 	private func flushAllTouches() {
+		cancelHoldIndicator()
 		stopMomentum()
 		releaseClickHoldIfNeeded()
-		endCursorIfNeeded()
+		endCursorIfNeeded(lifted: false)
+		endMultiFinger()
 		isDragging = false
 		twoFingerResidual = false
+		multiFingerResidual = false
 		twoFingerMode = .undecided
 		activeTouches = []
+	}
+
+	// called when the touch mode is changed during a stream
+	func applyCursorMode() {
+		flushAllTouches()
+		if SettingsHandler.cursorMode == .direct {
+			resetZoom()   // Direct Touch always shows the whole desktop
+		}
+		updatePanHandle()
 	}
 
 	private func startCursor() {
@@ -817,22 +884,147 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		cursorDidMoveThisTouch = false
 		smoothedFingerSpeed = 0
 		singleTouchStartScreen = activeTouches.first?.location(in: view) ?? .zero
-		if SettingsHandler.cursorMode == .direct {
-			if let t = activeTouches.first {
-				cursorContentPos = clampToContent(contentView.convert(t.location(in: view), from: view))
-				CParsec.sendMousePosition(Int32(cursorContentPos.x), Int32(cursorContentPos.y))
-				positionCursorOverlay()
-			}
-			CParsec.sendMouseClickMessage(ParsecMouseButton.init(rawValue: 1), true)
-			haptic()
+		touchEmulatedThisTouch = SettingsHandler.cursorMode.isTouch && !CParsec.mouseInfo.mousePositionRelative
+		if touchEmulatedThisTouch {
+			beginTouch(at: singleTouchStartScreen)
+		} else if !clickHoldActive {
+			startHoldIndicator(at: cursorScreenPoint)
 		}
 	}
 
-	private func endCursorIfNeeded() {
-		if isDragging && SettingsHandler.cursorMode == .direct {
-			CParsec.sendMouseClickMessage(ParsecMouseButton.init(rawValue: 1), false)
+	private func endCursorIfNeeded(lifted: Bool) {
+		guard isDragging, touchPhase != .idle else { return }
+		finishTouch(lifted: lifted)
+	}
+
+	// MARK: - Windows-style touch (Direct, Two-Finger and Three-Finger modes)
+	// Parsec can only send mouse and keyboard, so a finger is turned into what Windows does with a
+	// touch: tap = click where the finger is, drag = scroll, hold = right click, hold then drag =
+	// drag whatever is under the finger.
+
+	private func beginTouch(at screen: CGPoint) {
+		touchHoldTimer?.invalidate()
+		touchPhase = .pending
+		var start = clampToContent(contentView.convert(screen, from: view))
+		// a second tap close to the first lands on the same spot, so Windows sees a double click
+		if CACurrentMediaTime() - lastTapTime < doubleTapWindow,
+		   hypot(screen.x - lastTapScreen.x, screen.y - lastTapScreen.y) < doubleTapSlop {
+			start = lastTapContent
+		}
+		touchStartContent = start
+		if !CParsec.mouseInfo.mousePositionRelative {
+			// hover first: Windows scrolls and clicks whatever is under the pointer
+			cursorContentPos = start
+			CParsec.sendMousePosition(Int32(start.x), Int32(start.y))
+			positionCursorOverlay()
+		}
+		startHoldIndicator(at: screen)
+		touchHoldTimer = Timer.scheduledTimer(withTimeInterval: holdToDragDuration, repeats: false) { [weak self] _ in
+			MainActor.assumeIsolated {
+				self?.touchHoldCompleted()
+			}
 		}
 	}
+
+	private func touchHoldCompleted() {
+		touchHoldTimer = nil
+		guard touchPhase == .pending else { return }
+		// the grey circle is full: lifting now is a right click, moving now drags
+		touchPhase = .holdArmed
+		cancelHoldIndicator()
+		haptic(true)
+		showClickRipple(at: singleTouchStartScreen, secondary: true)
+	}
+
+	private func moveTouch(with t: UITouch) {
+		let loc = t.location(in: view)
+		let prev = t.previousLocation(in: view)
+		let travelled = hypot(loc.x - singleTouchStartScreen.x, loc.y - singleTouchStartScreen.y)
+		if travelled > tapMoveSlop {
+			cursorDidMoveThisTouch = true
+		}
+		switch touchPhase {
+		case .pending:
+			guard travelled > holdMoveSlop else { return }
+			touchHoldTimer?.invalidate()
+			touchHoldTimer = nil
+			cancelHoldIndicator()
+			touchPhase = .scrolling
+			accumulatedScrollX = 0
+			accumulatedScrollY = 0
+			scrollTouch(dx: loc.x - prev.x, dy: loc.y - prev.y, total: CGPoint(x: loc.x - singleTouchStartScreen.x, y: loc.y - singleTouchStartScreen.y))
+		case .scrolling:
+			scrollTouch(dx: loc.x - prev.x, dy: loc.y - prev.y, total: CGPoint(x: loc.x - singleTouchStartScreen.x, y: loc.y - singleTouchStartScreen.y))
+		case .holdArmed:
+			guard travelled > holdMoveSlop else { return }
+			touchPhase = .dragging
+			CParsec.sendMouseMessage(ParsecMouseButton(rawValue: 1), Int32(touchStartContent.x), Int32(touchStartContent.y), true)
+			dragTouch(to: loc)
+		case .dragging:
+			dragTouch(to: loc)
+		case .idle:
+			break
+		}
+	}
+
+	// one finger scrolls like on a touch screen: the content follows the finger
+	private func scrollTouch(dx: CGFloat, dy: CGFloat, total: CGPoint) {
+		let totalX = abs(total.x)
+		let totalY = abs(total.y)
+		let deltaY = totalY >= totalX * 0.5 ? Float(dy) : 0
+		let deltaX = totalX >= totalY * 0.5 ? Float(dx) : 0
+		sendScroll(deltaX: deltaX, deltaY: deltaY)
+	}
+
+	private func dragTouch(to loc: CGPoint) {
+		cursorContentPos = clampToContent(contentView.convert(loc, from: view))
+		CParsec.sendMousePosition(Int32(cursorContentPos.x), Int32(cursorContentPos.y))
+		positionCursorOverlay()
+		// near the edge of a zoomed view, keep sliding the view so a drag can reach off-screen spots
+		edgeScrollPoint = loc
+		if edgeScrollVelocity(at: loc) != .zero {
+			if !edgeScrollActive { edgeScrollLastTick = 0 }
+			edgeScrollActive = true
+			ensureMomentumLink()
+		} else {
+			edgeScrollActive = false
+		}
+	}
+
+	private func finishTouch(lifted: Bool) {
+		touchHoldTimer?.invalidate()
+		touchHoldTimer = nil
+		cancelHoldIndicator()
+		edgeScrollActive = false
+		let phase = touchPhase
+		touchPhase = .idle
+		let x = Int32(touchStartContent.x)
+		let y = Int32(touchStartContent.y)
+		switch phase {
+		case .pending where lifted:
+			let left = ParsecMouseButton(rawValue: 1)
+			CParsec.sendMouseMessage(left, x, y, true)
+			CParsec.sendMouseMessage(left, x, y, false)
+			lastTapTime = CACurrentMediaTime()
+			lastTapScreen = singleTouchStartScreen
+			lastTapContent = touchStartContent
+			haptic()
+			showClickRipple(at: singleTouchStartScreen)
+		case .holdArmed where lifted:
+			// dont leak a right click to the host while backgrounding or after a disconnect
+			guard UIApplication.shared.applicationState == .active,
+				  ParsecBackgroundManager.shared.hasActiveConnection else { return }
+			let right = ParsecMouseButton(rawValue: 3)
+			CParsec.sendMouseMessage(right, x, y, true)
+			CParsec.sendMouseMessage(right, x, y, false)
+		case .dragging:
+			CParsec.sendMouseClickMessage(ParsecMouseButton(rawValue: 1), false)
+		default:
+			break
+		}
+	}
+
+	// MARK: - Two and three fingers
 
 	private func beginTwoFinger() {
 		twoFingerMode = .undecided
@@ -846,19 +1038,44 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		lastTwoFingerMidpoint = d.midpoint
 	}
 
+	// lets go of Ctrl if an app-zoom pinch was holding it
+	private func endMultiFinger() {
+		if appZoomCtrlHeld {
+			CParsec.sendKeyboardMessage(keyCode: 224, pressed: false)
+			appZoomCtrlHeld = false
+		}
+	}
+
+	// Spread and centre of the first two or three fingers. The spread is twice the mean distance
+	// from the centre, which for two fingers is simply the distance between them.
 	private func twoFingerDistanceAndMidpoint() -> (distance: CGFloat, midpoint: CGPoint) {
-		let pts = activeTouches.prefix(2).map { $0.location(in: view) }
-		guard pts.count == 2 else { return (0, pts.first ?? .zero) }
-		let dx = pts[1].x - pts[0].x
-		let dy = pts[1].y - pts[0].y
-		let mid = CGPoint(x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2)
-		return (hypot(dx, dy), mid)
+		let pts = activeTouches.prefix(3).map { $0.location(in: view) }
+		guard pts.count >= 2 else { return (0, pts.first ?? .zero) }
+		let n = CGFloat(pts.count)
+		var mid = CGPoint.zero
+		for p in pts {
+			mid.x += p.x / n
+			mid.y += p.y / n
+		}
+		var spread: CGFloat = 0
+		for p in pts {
+			spread += hypot(p.x - mid.x, p.y - mid.y) / n
+		}
+		return (spread * 2, mid)
 	}
 
 	private func handleActiveTouchesMoved() {
-		if (isDragging || clickHoldActive), !twoFingerResidual, activeTouches.count == 1, let t = activeTouches.first {
-			moveCursor(with: t)
-		} else if activeTouches.count >= 2 {
+		let count = activeTouches.count
+		if (isDragging || clickHoldActive), !twoFingerResidual, count == 1, let t = activeTouches.first {
+			if touchPhase != .idle {
+				moveTouch(with: t)
+			} else {
+				moveCursor(with: t)
+			}
+		} else if multiFingerResidual {
+			return
+		} else if count == 2 || (count == 3 && SettingsHandler.cursorMode == .threeFingerPanZoom) {
+			// three fingers only move the view in Three-Finger mode, elsewhere they're the keyboard swipe
 			handleTwoFinger()
 		}
 	}
@@ -867,8 +1084,12 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		let zoom = scrollView.zoomScale
 		let loc = t.location(in: view)
 		let prev = t.previousLocation(in: view)
-		if hypot(loc.x - singleTouchStartScreen.x, loc.y - singleTouchStartScreen.y) > tapMoveSlop {
+		let travelled = hypot(loc.x - singleTouchStartScreen.x, loc.y - singleTouchStartScreen.y)
+		if travelled > tapMoveSlop {
 			cursorDidMoveThisTouch = true
+		}
+		if travelled > holdMoveSlop {
+			cancelHoldIndicator()
 		}
 
 		if CParsec.mouseInfo.mousePositionRelative {
@@ -878,41 +1099,27 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 			return
 		}
 
-		if SettingsHandler.cursorMode == .direct {
-			cursorContentPos = clampToContent(contentView.convert(loc, from: view))
-		} else {
-			// Relative finger movement, predicted locally; sensitivity scales down with zoom so the
-			// cursor tracks the visible finger.
-			let now = CACurrentMediaTime()
-			let dt = CGFloat(now - lastCursorMoveTime)
-			let fx = loc.x - prev.x
-			let fy = loc.y - prev.y
-			let s = CGFloat(mouseSensitivity) / zoom * pointerGain(fingerDistance: hypot(fx, fy), dt: dt)
-			let dcx = fx * s
-			let dcy = fy * s
-			cursorContentPos = clampToContent(CGPoint(x: cursorContentPos.x + dcx, y: cursorContentPos.y + dcy))
-			// Smoothed velocity so a quick flick keeps gliding after the finger lifts.
-			if dt > 0.0005 && dt < 0.1 {
-				cursorVelocity = CGPoint(x: cursorVelocity.x * 0.4 + (dcx / dt) * 0.6,
-										 y: cursorVelocity.y * 0.4 + (dcy / dt) * 0.6)
-			}
-			lastCursorMoveTime = now
+		// Relative finger movement, predicted locally; sensitivity scales down with zoom so the
+		// cursor tracks the visible finger.
+		let now = CACurrentMediaTime()
+		let dt = CGFloat(now - lastCursorMoveTime)
+		let fx = loc.x - prev.x
+		let fy = loc.y - prev.y
+		let s = CGFloat(mouseSensitivity) / zoom * pointerGain(fingerDistance: hypot(fx, fy), dt: dt)
+		let dcx = fx * s
+		let dcy = fy * s
+		cursorContentPos = clampToContent(CGPoint(x: cursorContentPos.x + dcx, y: cursorContentPos.y + dcy))
+		// Smoothed velocity so a quick flick keeps gliding after the finger lifts.
+		if dt > 0.0005 && dt < 0.1 {
+			cursorVelocity = CGPoint(x: cursorVelocity.x * 0.4 + (dcx / dt) * 0.6,
+									 y: cursorVelocity.y * 0.4 + (dcy / dt) * 0.6)
 		}
+		lastCursorMoveTime = now
 		// Command the host to the ABSOLUTE predicted position (not a delta) so the host cursor can't
 		// crawl behind network round-trips - clicks always land where the cursor is drawn.
 		CParsec.sendMousePosition(Int32(cursorContentPos.x), Int32(cursorContentPos.y))
-		if SettingsHandler.cursorMode == .direct {
-			edgeScrollPoint = loc
-			if cursorDidMoveThisTouch && edgeScrollVelocity(at: loc) != .zero {
-				if !edgeScrollActive { edgeScrollLastTick = 0 }
-				edgeScrollActive = true
-				ensureMomentumLink()
-			}
-		} else {
-			centerViewportOnCursorPos()
-			positionCursorOverlay()
-			keepCursorAboveKeyboard()
-		}
+		centerViewportOnCursorPos()
+		keepCursorAboveKeyboard()
 		positionCursorOverlay()
 	}
 
@@ -930,14 +1137,51 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		return 0.65 + eased * 1.6         // 0.65x ... 2.25x
 	}
 
+	// What two (or, in Three-Finger mode, three) fingers do, decided once per gesture:
+	//   Trackpad      pinch = zoom the view (Pinch to Zoom on), drag = scroll (or pan, see settings)
+	//   Direct        pinch = Ctrl+wheel zoom in the app under the fingers, drag = scroll
+	//   Two-Finger    pinch = zoom the view, drag = move the view
+	//   Three-Finger  2 fingers like Direct, 3 fingers zoom / move the view
 	private func handleTwoFinger() {
 		let d = twoFingerDistanceAndMidpoint()
+		let mode = SettingsHandler.cursorMode
 		if twoFingerMode == .undecided {
 			let distDelta = abs(d.distance - startPinchDistance)
 			let midDelta = hypot(d.midpoint.x - startTwoFingerMidpoint.x, d.midpoint.y - startTwoFingerMidpoint.y)
 			let deadZone: CGFloat = 12.0
 			if distDelta > deadZone || midDelta > deadZone {
-				twoFingerMode = (distDelta > midDelta && zoomEnabled) ? .zoom : .scroll
+				let pinching = distDelta > midDelta
+				switch mode {
+				case .touchpad:
+					if pinching && zoomEnabled {
+						twoFingerMode = .zoom
+					} else if SettingsHandler.twoFingerDrag == .panView && scrollView.zoomScale > 1.01 {
+						twoFingerMode = .pan
+					} else {
+						twoFingerMode = .scroll
+					}
+				case .direct:
+					twoFingerMode = pinching ? .appZoom : .scroll
+				case .twoFingerPanZoom:
+					twoFingerMode = pinching ? .zoom : .pan
+				case .threeFingerPanZoom:
+					if activeTouches.count >= 3 {
+						twoFingerMode = pinching ? .zoom : .pan
+					} else {
+						twoFingerMode = pinching ? .appZoom : .scroll
+					}
+				}
+				if mode.isTouch && (twoFingerMode == .scroll || twoFingerMode == .appZoom) && !CParsec.mouseInfo.mousePositionRelative {
+					// Windows scrolls / zooms whatever is under the pointer, so put it under the fingers
+					cursorContentPos = clampToContent(contentView.convert(d.midpoint, from: view))
+					CParsec.sendMousePosition(Int32(cursorContentPos.x), Int32(cursorContentPos.y))
+					positionCursorOverlay()
+				}
+				if twoFingerMode == .appZoom {
+					CParsec.sendKeyboardMessage(keyCode: 224, pressed: true)
+					appZoomCtrlHeld = true
+					appZoomAccum = 0
+				}
 				twoFingerDidMove = true
 			}
 		}
@@ -946,38 +1190,57 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 			if lastPinchDistance > 0 {
 				applyZoom(to: scrollView.zoomScale * (d.distance / lastPinchDistance), anchorInView: d.midpoint)
 			}
+		case .appZoom:
+			// Ctrl+wheel, the zoom every Windows app understands: one notch per ~12% of pinch
+			if lastPinchDistance > 0 && d.distance > 0 {
+				appZoomAccum += log(d.distance / lastPinchDistance)
+				let step: CGFloat = 0.12
+				while appZoomAccum > step {
+					CParsec.sendWheelMsg(x: 0, y: 120)
+					appZoomAccum -= step
+				}
+				while appZoomAccum < -step {
+					CParsec.sendWheelMsg(x: 0, y: -120)
+					appZoomAccum += step
+				}
+			}
 		case .scroll:
 			// Lock to the gesture's dominant axis so a vertical swipe doesn't drift sideways (and
 			// the other way round); a clearly diagonal swipe scrolls both ways.
 			let total = CGPoint(x: abs(d.midpoint.x - startTwoFingerMidpoint.x), y: abs(d.midpoint.y - startTwoFingerMidpoint.y))
-			let allowY = total.y >= total.x * 0.5
-			let allowX = total.x >= total.y * 0.5
-			let deltaY = allowY ? Float(d.midpoint.y - lastTwoFingerMidpoint.y) : 0
-			let deltaX = allowX ? Float(d.midpoint.x - lastTwoFingerMidpoint.x) : 0
-			let direction: Float = SettingsHandler.reverseScrollDirection ? -1.0 : 1.0
-			let contribution = deltaY * scrollWheelSpeed * direction
-			accumulatedScrollY += contribution
-			// natural scrolling: finger right = content right = wheel left
-			accumulatedScrollX -= deltaX * scrollWheelSpeed * direction
-			let intScrollY = Int32(accumulatedScrollY)
-			let intScrollX = Int32(accumulatedScrollX)
-			if intScrollY != 0 || intScrollX != 0 {
-				CParsec.sendWheelMsg(x: intScrollX, y: intScrollY)
-				accumulatedScrollY -= Float(intScrollY)
-				accumulatedScrollX -= Float(intScrollX)
-			}
-			// Track scroll velocity for a little post-flick momentum.
-			let snow = CACurrentMediaTime()
-			let sdt = Float(snow - lastScrollMoveTime)
-			if sdt > 0.0005 && sdt < 0.1 {
-				scrollVelocity = scrollVelocity * 0.4 + (contribution / sdt) * 0.6
-			}
-			lastScrollMoveTime = snow
+			let deltaY = total.y >= total.x * 0.5 ? Float(d.midpoint.y - lastTwoFingerMidpoint.y) : 0
+			let deltaX = total.x >= total.y * 0.5 ? Float(d.midpoint.x - lastTwoFingerMidpoint.x) : 0
+			sendScroll(deltaX: deltaX, deltaY: deltaY)
+		case .pan:
+			panViewport(by: CGPoint(x: lastTwoFingerMidpoint.x - d.midpoint.x, y: lastTwoFingerMidpoint.y - d.midpoint.y))
 		case .undecided:
 			break
 		}
 		lastPinchDistance = d.distance
 		lastTwoFingerMidpoint = d.midpoint
+	}
+
+	// finger movement (points) to wheel messages, natural direction, with flick momentum tracking
+	private func sendScroll(deltaX: Float, deltaY: Float) {
+		let direction: Float = SettingsHandler.reverseScrollDirection ? -1.0 : 1.0
+		let contribution = deltaY * scrollWheelSpeed * direction
+		accumulatedScrollY += contribution
+		// natural scrolling: finger right = content right = wheel left
+		accumulatedScrollX -= deltaX * scrollWheelSpeed * direction
+		let intScrollY = Int32(accumulatedScrollY)
+		let intScrollX = Int32(accumulatedScrollX)
+		if intScrollY != 0 || intScrollX != 0 {
+			CParsec.sendWheelMsg(x: intScrollX, y: intScrollY)
+			accumulatedScrollY -= Float(intScrollY)
+			accumulatedScrollX -= Float(intScrollX)
+		}
+		// Track scroll velocity for a little post-flick momentum.
+		let snow = CACurrentMediaTime()
+		let sdt = Float(snow - lastScrollMoveTime)
+		if sdt > 0.0005 && sdt < 0.1 {
+			scrollVelocity = scrollVelocity * 0.4 + (contribution / sdt) * 0.6
+		}
+		lastScrollMoveTime = snow
 	}
 
 	private func startCursorMomentum() {
@@ -1093,6 +1356,9 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		newOff.x = min(max(0, newOff.x), maxX)
 		newOff.y = min(max(0, newOff.y), maxY)
 		scrollView.setContentOffset(newOff, animated: false)
+		positionCursorOverlay()
+		// the touch modes put the pointer under the finger, there's no cursor to keep in view
+		guard SettingsHandler.cursorMode == .touchpad else { return }
 		// Park the cursor at the viewport centre after zooming so a later drag doesn't snap the view.
 		let bottomInset = keyboardVisible ? keyboardHeight : 0.0
 		let centerX = (scrollView.bounds.width / 2 + scrollView.contentOffset.x) / newZoom
@@ -1135,11 +1401,12 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 	@objc func handleSingleFingerTap(_ gestureRecognizer: UITapGestureRecognizer) {
 		// Only click if the finger stayed put; a moved finger was a cursor nudge, not a tap.
 		if cursorDidMoveThisTouch { return }
-		if SettingsHandler.cursorMode == .direct { return }
+		if touchEmulatedThisTouch { return }   // the touch modes click on lift themselves
 		let location = gestureRecognizer.location(in: gestureRecognizer.view)
 		let adjustedLocation = contentView.convert(location, from: view)
 		touchController.onTap(typeOfTap: 1, location: adjustedLocation)
 		haptic()
+		showClickRipple(at: cursorScreenPoint)
 	}
 
 	@objc func handleTwoFingerTap(_ gestureRecognizer: UITapGestureRecognizer) {
@@ -1162,23 +1429,151 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		let adjustedLocation = contentView.convert(location, from: view)
 		touchController.onTap(typeOfTap: 3, location: adjustedLocation)
 		haptic(true)
+		showClickRipple(at: SettingsHandler.cursorMode.isTouch ? location : cursorScreenPoint, secondary: true)
 	}
 
 	@objc func handleThreeFinderTap(_ gestureRecognizer: UITapGestureRecognizer) {
-		setKeyboardVisible(!keyboardVisible)
+		if twoFingerDidMove { return }   // the fingers moved or pinched the view, not a tap
+		guard SettingsHandler.threeFingerTap == .middleClick else {
+			setKeyboardVisible(!keyboardVisible)
+			return
+		}
+		guard UIApplication.shared.applicationState == .active,
+			  ParsecBackgroundManager.shared.hasActiveConnection else { return }
+		let location = gestureRecognizer.location(in: gestureRecognizer.view)
+		touchController.onTap(typeOfTap: 2, location: contentView.convert(location, from: view))
+		haptic(true)
+		showClickRipple(at: SettingsHandler.cursorMode.isTouch ? location : cursorScreenPoint, secondary: true)
+	}
+
+	@objc func handleThreeFingerSwipe(_ gestureRecognizer: UISwipeGestureRecognizer) {
+		// in Three-Finger Pan & Zoom three fingers move the view instead
+		if SettingsHandler.cursorMode == .threeFingerPanZoom { return }
+		if gestureRecognizer.direction == .up {
+			if !keyboardVisible { setKeyboardVisible(true) }
+		} else if keyboardVisible {
+			setKeyboardVisible(false)
+		} else {
+			// nothing to hide: bring up the stream menu instead, also when the buttons are hidden
+			flushAllTouches()
+			onMenuEdgeSwipe?()
+		}
+	}
+
+	// Two-finger pan mode: drag the zoomed picture around instead of scrolling the PC.
+	private func panViewport(by delta: CGPoint) {
+		let bottomInset = keyboardVisible ? keyboardHeight : 0.0
+		let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
+		let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height + bottomInset)
+		let off = scrollView.contentOffset
+		let next = CGPoint(x: min(max(0, off.x + delta.x), maxX), y: min(max(0, off.y + delta.y), maxY))
+		guard next != off else { return }
+		scrollView.setContentOffset(next, animated: false)
+		if SettingsHandler.cursorMode == .touchpad {
+			// park the cursor in the middle of what's visible now, as zooming does, so the next
+			// one-finger move doesn't yank the view back to where the cursor used to be
+			let zoom = scrollView.zoomScale
+			cursorContentPos = clampToContent(CGPoint(x: (scrollView.bounds.width / 2 + next.x) / zoom,
+													  y: ((scrollView.bounds.height - bottomInset) / 2 + next.y) / zoom))
+			if !CParsec.mouseInfo.mousePositionRelative {
+				CParsec.sendMousePosition(Int32(cursorContentPos.x), Int32(cursorContentPos.y))
+			}
+		}
+		positionCursorOverlay()
+	}
+
+	private func startHoldIndicator(at point: CGPoint) {
+		cancelHoldIndicator()
+		// a game that captured the mouse has no visible cursor to put the circle under
+		guard SettingsHandler.clickRipple, !CParsec.mouseInfo.mousePositionRelative else { return }
+		let size: CGFloat = 56
+		let circle = CAShapeLayer()
+		circle.path = UIBezierPath(ovalIn: CGRect(x: -size / 2, y: -size / 2, width: size, height: size)).cgPath
+		circle.position = point
+		circle.fillColor = UIColor.systemGray.withAlphaComponent(0.35).cgColor
+		circle.strokeColor = UIColor.systemGray.withAlphaComponent(0.85).cgColor
+		circle.lineWidth = 2
+		circle.opacity = 0
+		view.layer.addSublayer(circle)
+
+		// waits a moment (a plain tap never shows it), then fills in exactly as the hold completes
+		let grow = CABasicAnimation(keyPath: "transform.scale")
+		grow.fromValue = 0.2
+		grow.toValue = 1.0
+		let show = CABasicAnimation(keyPath: "opacity")
+		show.fromValue = 0.0
+		show.toValue = 1.0
+		let group = CAAnimationGroup()
+		group.animations = [grow, show]
+		group.beginTime = circle.convertTime(CACurrentMediaTime(), from: nil) + holdIndicatorDelay
+		group.duration = holdToDragDuration - holdIndicatorDelay
+		group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+		group.fillMode = .both
+		group.isRemovedOnCompletion = false
+		circle.add(group, forKey: "hold")
+		holdIndicator = circle
+	}
+
+	private func cancelHoldIndicator() {
+		holdIndicator?.removeFromSuperlayer()
+		holdIndicator = nil
+	}
+
+	// where the cursor is drawn on screen right now (zoom and pan applied)
+	var cursorScreenPoint: CGPoint {
+		let zoom = scrollView.zoomScale
+		let off = scrollView.contentOffset
+		return CGPoint(x: cursorContentPos.x * zoom - off.x, y: cursorContentPos.y * zoom - off.y)
+	}
+
+	// A quick ring that pops where a click landed, so you see that (and where) it clicked even when
+	// the host cursor is tiny or hidden. Accent blue for right / middle clicks and drags.
+	func showClickRipple(at point: CGPoint, secondary: Bool = false) {
+		guard SettingsHandler.clickRipple else { return }
+		let color: UIColor = secondary ? .systemBlue : .white
+		let size: CGFloat = 46
+		let ring = CAShapeLayer()
+		ring.path = UIBezierPath(ovalIn: CGRect(x: -size / 2, y: -size / 2, width: size, height: size)).cgPath
+		ring.position = point
+		ring.fillColor = color.withAlphaComponent(0.22).cgColor
+		ring.strokeColor = color.withAlphaComponent(0.9).cgColor
+		ring.lineWidth = 2
+		ring.shadowColor = UIColor.black.cgColor
+		ring.shadowOpacity = 0.35
+		ring.shadowRadius = 2
+		ring.shadowOffset = .zero
+		ring.opacity = 0   // the end state, the animation below runs from visible to this
+		view.layer.addSublayer(ring)
+
+		let grow = CABasicAnimation(keyPath: "transform.scale")
+		grow.fromValue = 0.35
+		grow.toValue = 1.0
+		let fade = CABasicAnimation(keyPath: "opacity")
+		fade.fromValue = 1.0
+		fade.toValue = 0.0
+		let group = CAAnimationGroup()
+		group.animations = [grow, fade]
+		group.duration = 0.38
+		group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+		CATransaction.begin()
+		CATransaction.setCompletionBlock { ring.removeFromSuperlayer() }
+		ring.add(group, forKey: "ripple")
+		CATransaction.commit()
 	}
 
 	@objc func handleLongPress(_ gestureRecognizer: UIGestureRecognizer) {
-		if SettingsHandler.cursorMode != .touchpad {
-			return
+		if touchEmulatedThisTouch && !clickHoldActive {
+			return   // the touch modes turn a hold into a right click / drag themselves
 		}
 		switch gestureRecognizer.state {
 		case .began:
 			// Click-and-hold (file drag): hold the left button; the overlay keeps moving the cursor.
+			cancelHoldIndicator()
 			clickHoldActive = true
 			CParsec.sendMouseClickMessage(ParsecMouseButton.init(rawValue: 1), true)
 			// without this there's no way to tell the hold turned into a drag until the cursor moves
 			haptic(true)
+			showClickRipple(at: cursorScreenPoint, secondary: true)
 		case .ended, .cancelled, .failed:
 			releaseClickHoldIfNeeded()
 		default:
@@ -1205,7 +1600,7 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 
 	func keepCursorAboveKeyboard() {
 		guard scrollView.zoomScale <= 1.0, keyboardVisible, scrollView.contentInset.bottom > 0, !pinnedToKeyboard,
-			  SettingsHandler.cursorMode != .direct, let cursor = u, !cursor.isHidden else { return }
+			  !SettingsHandler.cursorMode.isTouch, let cursor = u, !cursor.isHidden else { return }
 		let visibleBottom = view.bounds.height - keyboardHeight
 		let margin = min(50, max(0, (visibleBottom - cursor.frame.height) / 2 - 1))
 		let maxOffsetY = max(0, scrollView.contentSize.height - scrollView.bounds.height + scrollView.contentInset.bottom)
@@ -1271,6 +1666,18 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		return true
 	}
 
+	// back to the whole picture without turning pinch-zoom off
+	func resetZoom() {
+		guard scrollView.zoomScale > 1.0 else { return }
+		UIView.animate(withDuration: 0.25, animations: {
+			self.scrollView.zoomScale = 1.0
+			self.scrollView.contentOffset = .zero
+		}, completion: { _ in
+			self.setPanHandleAxes()
+			self.positionCursorOverlay()
+		})
+	}
+
 	func setZoomEnabled(_ enabled: Bool) {
 		// Pinch is driven manually in touchOverlay; just gate it with this flag.
 		zoomEnabled = enabled
@@ -1306,6 +1713,21 @@ class KeyboardButton: UIButton {
 	let keyText: String
 	let isToggleable: Bool
 	var isOn = false
+
+	// on Liquid Glass the keys are light tinted pills sitting on the glass bar, a latched
+	// modifier glows in the accent colour; before iOS 26 it's the classic black / grey keys
+	func applyStyle() {
+		if supportsLiquidGlass {
+			backgroundColor = isOn ? UIColor.systemBlue.withAlphaComponent(0.45) : UIColor.label.withAlphaComponent(0.08)
+			setTitleColor(.label, for: .normal)
+			layer.cornerRadius = 18
+		} else {
+			backgroundColor = isOn ? .lightGray : .black
+			setTitleColor(.white, for: .normal)
+			layer.cornerRadius = 6
+		}
+		layer.cornerCurve = .continuous
+	}
 
 	required init(keyText: String, isToggleable: Bool) {
 		self.keyText = keyText
@@ -1402,6 +1824,7 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 		let toolbarBackground = UIView(frame: CGRect(x: 0, y: 50, width: containerView.bounds.width, height: 44))
 		toolbarBackground.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
 		toolbarBackground.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.9)
+		applyLiquidGlass(toKeyBar: toolbarBackground, in: containerView)
 
 		let scrollView = UIScrollView(frame: CGRect(x: 8, y: 0, width: toolbarBackground.bounds.width - 80, height: 44))
 		scrollView.autoresizingMask = [.flexibleWidth]
@@ -1515,11 +1938,9 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 
 		// bigger, padded keys: the old 36pt / 10pt-font keys were easy to miss on a phone
 		button.setTitle(displayText, for: .normal)
-		button.setTitleColor(.white, for: .normal)
 		button.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
 		button.titleLabel?.textAlignment = .center
-		button.backgroundColor = .black
-		button.layer.cornerRadius = 6.0
+		button.applyStyle()
 		button.accessibilityLabel = displayText
 		// padding goes into the intrinsic size the stack view lays out with
 		button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
@@ -1543,7 +1964,7 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 		guard let bar = keyboardAccessoriesView else { return }
 		for button in toolbarButtons(in: bar) where button.isOn {
 			button.isOn = false
-			button.backgroundColor = .black
+			button.applyStyle()
 			if sendToHost {
 				CParsec.sendVirtualKeyboardInput(text: button.keyText, isOn: false)
 			}
@@ -1591,14 +2012,10 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 
 		if isToggleable {
 			isOn.toggle()
-			if isOn {
-				sender.backgroundColor = .lightGray
-			} else {
-				sender.backgroundColor = .black
-			}
 		}
 
 		sender.isOn = isOn
+		sender.applyStyle()
 		let keyText = sender.keyText
 
 		if isToggleable {
@@ -1612,6 +2029,23 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 		}
 
 	}
+
+	// iOS 26+: the key bar becomes a floating Liquid Glass bar above the keyboard
+	#if compiler(>=6.2)
+	private func applyLiquidGlass(toKeyBar bar: UIView, in container: UIView) {
+		guard #available(iOS 26.0, *) else { return }
+		bar.frame = CGRect(x: 8, y: 50, width: container.bounds.width - 16, height: 44)
+		bar.backgroundColor = .clear
+		let glass = UIVisualEffectView(effect: UIGlassEffect())
+		glass.frame = bar.bounds
+		glass.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+		// glass picks its own rounded shape on iOS 26 (it ignores layer.cornerRadius), so no clipping
+		// here, that would only cut off the edge highlights
+		bar.insertSubview(glass, at: 0)
+	}
+	#else
+	private func applyLiquidGlass(toKeyBar bar: UIView, in container: UIView) { }
+	#endif
 
 	@objc func doneTapped() {
 		// Resign first responder to dismiss the keyboard

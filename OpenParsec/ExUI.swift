@@ -1,5 +1,56 @@
 import SwiftUI
 
+// MARK: - Liquid Glass
+
+/// true when Apple's Liquid Glass material can be used: built with the iOS 26+ SDK and running on
+/// iOS 26 or later. Everything below falls back to the classic flat look otherwise.
+let supportsLiquidGlass: Bool = {
+	#if compiler(>=6.2)
+	if #available(iOS 26.0, *) { return true }
+	#endif
+	return false
+}()
+
+/// Rounded rectangle that keeps the classic radius on old iOS and uses the rounder, concentric
+/// radius Liquid Glass is designed around on iOS 26+.
+func glassRounded(_ classic: CGFloat, glass: CGFloat) -> RoundedRectangle {
+	RoundedRectangle(cornerRadius: supportsLiquidGlass ? glass : classic, style: .continuous)
+}
+
+#if compiler(>=6.2)
+@available(iOS 26.0, *)
+func liquidGlassMaterial(interactive: Bool, tint: Color?) -> Glass {
+	var glass = Glass.regular
+	if let tint = tint {
+		glass = glass.tint(tint)
+	}
+	if interactive {
+		glass = glass.interactive()
+	}
+	return glass
+}
+
+extension View {
+	/// The official Liquid Glass material on iOS 26+, `fallback` painted in `shape` before that.
+	/// `interactive` makes the glass react to touches (use it on buttons), `tint` colours it.
+	@ViewBuilder
+	func liquidGlass<S: Shape>(in shape: S, interactive: Bool = false, tint: Color? = nil, fallback: Color) -> some View {
+		if #available(iOS 26.0, *) {
+			self.glassEffect(liquidGlassMaterial(interactive: interactive, tint: tint), in: shape)
+		} else {
+			self.background(shape.fill(fallback))
+		}
+	}
+}
+#else
+extension View {
+	// SDK without Liquid Glass (Xcode 16 or older): always the classic look
+	func liquidGlass<S: Shape>(in shape: S, interactive: Bool = false, tint: Color? = nil, fallback: Color) -> some View {
+		self.background(shape.fill(fallback))
+	}
+}
+#endif
+
 /**
  * Category Title
  *
@@ -15,10 +66,28 @@ struct CatTitle: View {
 	var body: some View {
 		HStack {
 			Text(text)
+				.font(.system(size: 13, weight: .semibold))
+				.opacity(0.6)
 			Spacer()
 		}
-		.padding(.horizontal)
-		.padding(.vertical, 4)
+		.padding(.horizontal, 28)
+		.padding(.top, 14)
+		.padding(.bottom, 2)
+	}
+}
+
+/// The small coloured rounded square with a white symbol that leads a settings row, as in the
+/// iOS Settings app, so a long list can be scanned by colour and shape.
+struct IconBadge: View {
+	var symbol: String
+	var tint: Color
+
+	var body: some View {
+		Image(systemName: symbol)
+			.font(.system(size: 14, weight: .semibold))
+			.foregroundColor(.white)
+			.frame(width: 28, height: 28)
+			.background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(tint))
 	}
 }
 
@@ -36,9 +105,9 @@ struct CatList<Content: View>: View {
 	}
 
 	var body: some View {
-		VStack(content: content)
-			.padding(.vertical, 10)
-			.background(Rectangle().fill(Color("BackgroundTab")).cornerRadius(10))
+		VStack(spacing: 10, content: content)
+			.padding(.vertical, 12)
+			.background(glassRounded(10, glass: 20).fill(Color("BackgroundTab")))
 			.padding(.horizontal)
 	}
 }
@@ -51,15 +120,22 @@ struct CatList<Content: View>: View {
  */
 struct CatItem<Content: View>: View {
 	var title: String
+	var icon: String?
+	var tint: Color
 	var content: () -> Content
 
-	init(_ title: String, @ViewBuilder content: @escaping () -> Content) {
+	init(_ title: String, icon: String? = nil, tint: Color = Color("AccentColor"), @ViewBuilder content: @escaping () -> Content) {
 		self.title = title
+		self.icon = icon
+		self.tint = tint
 		self.content = content
 	}
 
 	var body: some View {
-		HStack {
+		HStack(spacing: 12) {
+			if let icon = icon {
+				IconBadge(symbol: icon, tint: tint)
+			}
 			Text(title)
 				.lineLimit(1)
 			Spacer()
@@ -71,12 +147,16 @@ struct CatItem<Content: View>: View {
 
 struct CatSlider: View {
 	var title: String
+	var icon: String?
+	var tint: Color
 	var value: Binding<Double>
 	var range: ClosedRange<Double>
 	var step: Double
 
-	init(_ title: String, value: Binding<Double>, in range: ClosedRange<Double>, step: Double) {
+	init(_ title: String, icon: String? = nil, tint: Color = Color("AccentColor"), value: Binding<Double>, in range: ClosedRange<Double>, step: Double) {
 		self.title = title
+		self.icon = icon
+		self.tint = tint
 		self.value = value
 		self.range = range
 		self.step = step
@@ -84,15 +164,85 @@ struct CatSlider: View {
 
 	var body: some View {
 		VStack(spacing: 4) {
-			HStack {
+			HStack(spacing: 12) {
+				if let icon = icon {
+					IconBadge(symbol: icon, tint: tint)
+				}
 				Text(title)
 					.lineLimit(1)
 				Spacer()
 				Text(String(format: "%.1f", value.wrappedValue))
+					.font(.system(size: 15, weight: .medium).monospacedDigit())
+					.opacity(0.6)
 			}
 			Slider(value: value, in: range, step: step)
 		}
 		.padding(.horizontal)
+	}
+}
+
+/// The four touch input modes as tappable cards, two by two, with what the chosen one does
+/// written underneath.
+struct TouchModeCards: View {
+	@Binding var selection: CursorMode
+
+	private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 10) {
+			LazyVGrid(columns: columns, spacing: 10) {
+				ForEach(CursorMode.allCases, id: \.self) { mode in
+					card(mode)
+				}
+			}
+			Text(selection.summary)
+				.font(.system(size: 13))
+				.opacity(0.7)
+				.fixedSize(horizontal: false, vertical: true)
+				.id(selection)
+				.transition(.opacity)
+		}
+		.padding(.horizontal)
+	}
+
+	func card(_ mode: CursorMode) -> some View {
+		let selected = selection == mode
+		let accent = Color("AccentColor")
+		return Button(action: {
+			withAnimation(.easeInOut(duration: 0.18)) { selection = mode }
+		}) {
+			VStack(alignment: .leading, spacing: 8) {
+				HStack {
+					Image(systemName: mode.icon)
+						.font(.system(size: 20, weight: .medium))
+						.foregroundColor(selected ? .white : accent)
+						.frame(width: 38, height: 38)
+						.background(Circle().fill(selected ? accent : accent.opacity(0.15)))
+					Spacer()
+					Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+						.font(.system(size: 18))
+						.foregroundColor(selected ? accent : Color("Foreground").opacity(0.25))
+				}
+				Text(mode.title)
+					.font(.system(size: 14, weight: .semibold))
+					.lineLimit(2)
+					.multilineTextAlignment(.leading)
+					.fixedSize(horizontal: false, vertical: true)
+				Spacer(minLength: 0)
+			}
+			.padding(12)
+			.frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
+			.background(RoundedRectangle(cornerRadius: 16, style: .continuous)
+				.fill(selected ? accent.opacity(0.14) : Color("Foreground").opacity(0.05)))
+			.overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+				.stroke(selected ? accent.opacity(0.6) : Color.clear, lineWidth: 1.5))
+			.contentShape(Rectangle())
+		}
+		.buttonStyle(PlainButtonStyle())
+		.foregroundColor(Color("Foreground"))
+		.accessibilityLabel(Text(mode.title))
+		.accessibilityHint(Text(mode.summary))
+		.accessibilityAddTraits(selected ? AccessibilityTraits.isSelected : AccessibilityTraits())
 	}
 }
 
@@ -111,8 +261,8 @@ struct ConnectionLogPanel: View {
 		}
 		.padding(10)
 		.frame(maxWidth: 640)
-		.background(Color.black.opacity(0.55))
-		.cornerRadius(8)
+		// dark-tinted glass keeps the white log text readable over a bright stream
+		.liquidGlass(in: glassRounded(8, glass: 16), tint: Color.black.opacity(0.35), fallback: Color.black.opacity(0.55))
 		.padding(.horizontal, 16)
 		.padding(.top, 8)
 	}
