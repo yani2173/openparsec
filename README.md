@@ -28,10 +28,14 @@ Touch modes can be set in Settings or the stream menu. Touchpad moves the cursor
 | Tap | Click |
 | 2-finger tap | Right click |
 | Press and hold | Drag (Touchpad) |
-| 2-finger drag | Scroll |
+| 2-finger drag | Scroll (up/down and sideways) |
 | Pinch | Zoom, with Pinch to Zoom on |
 | 3-finger tap | On-screen keyboard |
 | Swipe in from the left edge | Stream menu, when the buttons are hidden |
+
+Pointer Acceleration (on by default) makes slow finger movement precise and fast swipes travel further, like a laptop trackpad. Haptic Feedback gives a small tap on every click, right click and drag. Both can be turned off in Settings.
+
+The keyboard bar has one-tap shortcuts: Copy, Paste, Cut, Undo, Select All, Alt+Tab, Show Desktop, Task Manager, plus Home/End/Page Up/Page Down. With Option Key as Command on (Mac hosts) Copy/Paste/Cut/Undo/Select All use ⌘ instead of Ctrl and Alt+Tab becomes ⌘+Tab; Show Desktop and Task Manager are Windows shortcuts.
 
 ## Mouse & Keyboard
 Hardware mice and keyboards are supported.
@@ -57,7 +61,18 @@ Microphone passthrough isn't supported by the last public release of the Parsec 
 For sudden lag or a bitrate that hardly goes over 10 Mbps, run Steam Link's network test. Constant spikes in the graph mean a problem with Apple that the app can do little about, see [here](https://github.com/moonlight-stream/moonlight-ios/issues/627) for more discussion.
 
 ## Building
-Clone with `--recursive` for the Parsec SDK submodule, open `OpenParsec.xcodeproj`, set a team and bundle identifier under Signing & Capabilities, and build. CI builds with Xcode 26.2.
+Clone with `--recursive` for the Parsec SDK submodule, open `OpenParsec.xcodeproj`, set a team and bundle identifier under Signing & Capabilities, and build. CI builds with the newest stable Xcode (iOS 27 SDK) on the `macos-26` runner.
+
+### Unsigned IPA
+The **Build unsigned IPA** workflow (Actions tab → Run workflow) produces `OpenParsec-unsigned.ipa` as a downloadable artifact. Pushing a `v*` tag also attaches it to that release. You can pick the Xcode version, runner image and configuration when starting it by hand.
+
+On a Mac you can build the same file locally:
+
+```bash
+./scripts/build-unsigned-ipa.sh
+```
+
+The output lands in `build/OpenParsec-unsigned.ipa`. It carries no signature at all, so sign it with AltStore, SideStore, Sideloadly or similar. For TrollStore use the fake-signed nightly instead.
 
 ## Contributing
 See [CONTRIBUTING](CONTRIBUTING.md).

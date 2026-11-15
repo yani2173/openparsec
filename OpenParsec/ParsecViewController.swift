@@ -56,6 +56,11 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 	// Two-finger scroll-wheel accumulation, kept separate from cursor movement.
 	var lastScrollTranslation: CGPoint = .zero
 	var accumulatedScrollY: Float = 0.0
+	var accumulatedScrollX: Float = 0.0
+	// smoothed finger speed (pts/sec) driving touchpad pointer acceleration
+	var smoothedFingerSpeed: CGFloat = 0
+	private lazy var lightImpact = UIImpactFeedbackGenerator(style: .light)
+	private lazy var mediumImpact = UIImpactFeedbackGenerator(style: .medium)
 	var scrollWheelSpeed: Float { Float(SettingsHandler.scrollSensitivity) * 2.3 }
 
 	// Input-driven cursor + viewport state (manual touch handling via TouchOverlayView).
@@ -140,6 +145,8 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 	}
 
 	func updateRenderScale() {
+		// only matters once zoomed in or after zooming back out, skip the math every other frame
+		guard scrollView.zoomScale > 1.01 || appliedRenderScale != UIScreen.main.nativeScale else { return }
 		let target = computeRenderScale()
 		if abs(target - appliedRenderScale) > 0.01 {
 			appliedRenderScale = target
@@ -151,11 +158,13 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 
 	func updateImage() {
 		updateRenderScale()
-        // Optimization: Snap current valus
-        let currentMouseX = CParsec.mouseInfo.mouseX
-        let currentMouseY = CParsec.mouseInfo.mouseY
-        let currentHidden = CParsec.mouseInfo.cursorHidden
-        let currentImg = CParsec.mouseInfo.cursorImg
+		// runs every vsync: copy the cursor state once instead of going through the
+		// service protocol (and retaining the CGImage) four separate times
+		let info = CParsec.mouseInfo
+		let currentMouseX = info.mouseX
+		let currentMouseY = info.mouseY
+		let currentHidden = info.cursorHidden
+		let currentImg = info.cursorImg
 
         // Skip if nothing changed
         if currentMouseX == lastMouseX &&
@@ -806,6 +815,7 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		isDragging = true
 		twoFingerResidual = false
 		cursorDidMoveThisTouch = false
+		smoothedFingerSpeed = 0
 		singleTouchStartScreen = activeTouches.first?.location(in: view) ?? .zero
 		if SettingsHandler.cursorMode == .direct {
 			if let t = activeTouches.first {
@@ -814,6 +824,7 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 				positionCursorOverlay()
 			}
 			CParsec.sendMouseClickMessage(ParsecMouseButton.init(rawValue: 1), true)
+			haptic()
 		}
 	}
 
@@ -827,6 +838,7 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		twoFingerMode = .undecided
 		twoFingerDidMove = false
 		accumulatedScrollY = 0.0
+		accumulatedScrollX = 0.0
 		let d = twoFingerDistanceAndMidpoint()
 		startPinchDistance = d.distance
 		lastPinchDistance = d.distance
@@ -871,13 +883,15 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		} else {
 			// Relative finger movement, predicted locally; sensitivity scales down with zoom so the
 			// cursor tracks the visible finger.
-			let s = CGFloat(mouseSensitivity) / zoom
-			let dcx = (loc.x - prev.x) * s
-			let dcy = (loc.y - prev.y) * s
-			cursorContentPos = clampToContent(CGPoint(x: cursorContentPos.x + dcx, y: cursorContentPos.y + dcy))
-			// Smoothed velocity so a quick flick keeps gliding after the finger lifts.
 			let now = CACurrentMediaTime()
 			let dt = CGFloat(now - lastCursorMoveTime)
+			let fx = loc.x - prev.x
+			let fy = loc.y - prev.y
+			let s = CGFloat(mouseSensitivity) / zoom * pointerGain(fingerDistance: hypot(fx, fy), dt: dt)
+			let dcx = fx * s
+			let dcy = fy * s
+			cursorContentPos = clampToContent(CGPoint(x: cursorContentPos.x + dcx, y: cursorContentPos.y + dcy))
+			// Smoothed velocity so a quick flick keeps gliding after the finger lifts.
 			if dt > 0.0005 && dt < 0.1 {
 				cursorVelocity = CGPoint(x: cursorVelocity.x * 0.4 + (dcx / dt) * 0.6,
 										 y: cursorVelocity.y * 0.4 + (dcy / dt) * 0.6)
@@ -902,6 +916,20 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		positionCursorOverlay()
 	}
 
+	// Laptop-style pointer acceleration for touchpad mode: slow, careful finger movement gets finer
+	// than 1:1 so small targets are easy to hit, quick swipes cover more of the screen so the
+	// finger doesn't run out of glass. Off = the old constant speed.
+	private func pointerGain(fingerDistance: CGFloat, dt: CGFloat) -> CGFloat {
+		guard SettingsHandler.pointerAcceleration else { return 1 }
+		let speed: CGFloat = (dt > 0.0005 && dt < 0.1) ? fingerDistance / dt : 0
+		smoothedFingerSpeed = smoothedFingerSpeed * 0.5 + speed * 0.5
+		let slow: CGFloat = 120     // pts/sec at or below which movement is precise
+		let fast: CGFloat = 1400    // pts/sec at or above which the gain tops out
+		let t = min(max((smoothedFingerSpeed - slow) / (fast - slow), 0), 1)
+		let eased = t * t * (3 - 2 * t)   // smoothstep, so there's no felt "kick" between speeds
+		return 0.65 + eased * 1.6         // 0.65x ... 2.25x
+	}
+
 	private func handleTwoFinger() {
 		let d = twoFingerDistanceAndMidpoint()
 		if twoFingerMode == .undecided {
@@ -919,14 +947,24 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 				applyZoom(to: scrollView.zoomScale * (d.distance / lastPinchDistance), anchorInView: d.midpoint)
 			}
 		case .scroll:
-			let deltaY = Float(d.midpoint.y - lastTwoFingerMidpoint.y)
+			// Lock to the gesture's dominant axis so a vertical swipe doesn't drift sideways (and
+			// the other way round); a clearly diagonal swipe scrolls both ways.
+			let total = CGPoint(x: abs(d.midpoint.x - startTwoFingerMidpoint.x), y: abs(d.midpoint.y - startTwoFingerMidpoint.y))
+			let allowY = total.y >= total.x * 0.5
+			let allowX = total.x >= total.y * 0.5
+			let deltaY = allowY ? Float(d.midpoint.y - lastTwoFingerMidpoint.y) : 0
+			let deltaX = allowX ? Float(d.midpoint.x - lastTwoFingerMidpoint.x) : 0
 			let direction: Float = SettingsHandler.reverseScrollDirection ? -1.0 : 1.0
 			let contribution = deltaY * scrollWheelSpeed * direction
 			accumulatedScrollY += contribution
+			// natural scrolling: finger right = content right = wheel left
+			accumulatedScrollX -= deltaX * scrollWheelSpeed * direction
 			let intScrollY = Int32(accumulatedScrollY)
-			if intScrollY != 0 {
-				CParsec.sendWheelMsg(x: 0, y: intScrollY)
+			let intScrollX = Int32(accumulatedScrollX)
+			if intScrollY != 0 || intScrollX != 0 {
+				CParsec.sendWheelMsg(x: intScrollX, y: intScrollY)
 				accumulatedScrollY -= Float(intScrollY)
+				accumulatedScrollX -= Float(intScrollX)
 			}
 			// Track scroll velocity for a little post-flick momentum.
 			let snow = CACurrentMediaTime()
@@ -1088,6 +1126,12 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		u.frame = CGRect(x: screenX - hotX, y: screenY - hotY, width: w, height: h)
 	}
 
+	// a small tap on the glass confirms the click reached the PC without looking at the cursor
+	func haptic(_ strong: Bool = false) {
+		guard SettingsHandler.hapticFeedback else { return }
+		(strong ? mediumImpact : lightImpact).impactOccurred()
+	}
+
 	@objc func handleSingleFingerTap(_ gestureRecognizer: UITapGestureRecognizer) {
 		// Only click if the finger stayed put; a moved finger was a cursor nudge, not a tap.
 		if cursorDidMoveThisTouch { return }
@@ -1095,6 +1139,7 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		let location = gestureRecognizer.location(in: gestureRecognizer.view)
 		let adjustedLocation = contentView.convert(location, from: view)
 		touchController.onTap(typeOfTap: 1, location: adjustedLocation)
+		haptic()
 	}
 
 	@objc func handleTwoFingerTap(_ gestureRecognizer: UITapGestureRecognizer) {
@@ -1116,6 +1161,7 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 
 		let adjustedLocation = contentView.convert(location, from: view)
 		touchController.onTap(typeOfTap: 3, location: adjustedLocation)
+		haptic(true)
 	}
 
 	@objc func handleThreeFinderTap(_ gestureRecognizer: UITapGestureRecognizer) {
@@ -1131,6 +1177,8 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 			// Click-and-hold (file drag): hold the left button; the overlay keeps moving the cursor.
 			clickHoldActive = true
 			CParsec.sendMouseClickMessage(ParsecMouseButton.init(rawValue: 1), true)
+			// without this there's no way to tell the hold turned into a drag until the cursor moves
+			haptic(true)
 		case .ended, .cancelled, .failed:
 			releaseClickHoldIfNeeded()
 		default:
@@ -1390,7 +1438,28 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 		let leftButton = createKeyboardButton(displayText: "←", keyText: "LEFT", isToggleable: false)
 		let rightButton = createKeyboardButton(displayText: "→", keyText: "RIGHT", isToggleable: false)
 
-		let buttons = [tabBarButton, shiftBarButton, controlBarButton, altBarButton, windowsBarButton, escapeBarButton, f1Button, f2Button, f3Button, f4Button, f5Button, f6Button, f7Button, f8Button, f9Button, f10Button, f11Button, f12Button, deleteBarButton, upButton, downButton, leftButton, rightButton]
+		// one-tap shortcuts; PRIMARY is Ctrl on a PC host and Cmd on a Mac host (see resolveComboKey)
+		let shortcutButtons = [
+			createKeyboardButton(displayText: "Copy", keyText: "PRIMARY+C", isToggleable: false),
+			createKeyboardButton(displayText: "Paste", keyText: "PRIMARY+V", isToggleable: false),
+			createKeyboardButton(displayText: "Cut", keyText: "PRIMARY+X", isToggleable: false),
+			createKeyboardButton(displayText: "Undo", keyText: "PRIMARY+Z", isToggleable: false),
+			createKeyboardButton(displayText: "All", keyText: "PRIMARY+A", isToggleable: false),
+			createKeyboardButton(displayText: "Alt+Tab", keyText: "SWITCHER+TAB", isToggleable: false),
+			createKeyboardButton(displayText: "Desktop", keyText: "LGUI+D", isToggleable: false),
+			createKeyboardButton(displayText: "Task Mgr", keyText: "CONTROL+SHIFT+UIKeyInputEscape", isToggleable: false)
+		]
+		let navButtons = [
+			createKeyboardButton(displayText: "Home", keyText: "HOME", isToggleable: false),
+			createKeyboardButton(displayText: "End", keyText: "END", isToggleable: false),
+			createKeyboardButton(displayText: "PgUp", keyText: "PAGEUP", isToggleable: false),
+			createKeyboardButton(displayText: "PgDn", keyText: "PAGEDOWN", isToggleable: false)
+		]
+
+		let buttons = [escapeBarButton, tabBarButton, shiftBarButton, controlBarButton, altBarButton, windowsBarButton, deleteBarButton, upButton, downButton, leftButton, rightButton]
+			+ shortcutButtons
+			+ [f1Button, f2Button, f3Button, f4Button, f5Button, f6Button, f7Button, f8Button, f9Button, f10Button, f11Button, f12Button]
+			+ navButtons
 
 		for button in buttons {
 			buttonStackView.addArrangedSubview(button)
@@ -1444,18 +1513,21 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 	func createKeyboardButton(displayText: String, keyText: String, isToggleable: Bool) -> UIButton {
 		let button = KeyboardButton(keyText: keyText, isToggleable: isToggleable)
 
-		// Set the image and button properties
+		// bigger, padded keys: the old 36pt / 10pt-font keys were easy to miss on a phone
 		button.setTitle(displayText, for: .normal)
-		button.titleLabel?.font = .systemFont(ofSize: 10)
-		button.frame = CGRect(x: 0, y: 0, width: 36, height: 36)
-		button.titleLabel?.frame = CGRect(x: 0, y: 0, width: 30, height: 30)
-		if let label = button.titleLabel {
-			label.textAlignment = .center
-		}
+		button.setTitleColor(.white, for: .normal)
+		button.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+		button.titleLabel?.textAlignment = .center
 		button.backgroundColor = .black
-		button.layer.cornerRadius = 3.0
-
-		button.titleLabel?.contentMode = .scaleAspectFit
+		button.layer.cornerRadius = 6.0
+		button.accessibilityLabel = displayText
+		// padding goes into the intrinsic size the stack view lays out with
+		button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
+		button.translatesAutoresizingMaskIntoConstraints = false
+		NSLayoutConstraint.activate([
+			button.widthAnchor.constraint(greaterThanOrEqualToConstant: 40),
+			button.heightAnchor.constraint(equalToConstant: 36)
+		])
 
 		// Set target and action for button
 		button.addTarget(self, action: #selector(toolbarButtonClicked(_:)), for: .touchUpInside)
@@ -1483,7 +1555,37 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 		return own + view.subviews.flatMap { toolbarButtons(in: $0) }
 	}
 
+	// Mac hosts (Option as Command on) use Cmd where a PC uses Ctrl, and Cmd+Tab for the app switcher
+	private func resolveComboKey(_ name: String) -> String {
+		let mac = SettingsHandler.optionAsCommand
+		switch name {
+		case "PRIMARY": return mac ? "LGUI" : "CONTROL"
+		case "SWITCHER": return mac ? "LGUI" : "LALT"
+		default: return name
+		}
+	}
+
+	// press every key of a shortcut in order, then let go in reverse, like a person would
+	func sendKeyCombo(_ keyText: String) {
+		let codes = keyText.split(separator: "+").compactMap { KeyCodeTranslators.parsecKeyCodeTranslator(resolveComboKey(String($0))) }
+		guard !codes.isEmpty else { return }
+		for code in codes {
+			CParsec.sendKeyboardMessage(keyCode: code.rawValue, pressed: true)
+		}
+		// same short hold the virtual keys use, some apps ignore an instant release
+		DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
+			for code in codes.reversed() {
+				CParsec.sendKeyboardMessage(keyCode: code.rawValue, pressed: false)
+			}
+		}
+	}
+
 	@objc func toolbarButtonClicked(_ sender: KeyboardButton) {
+		haptic()
+		if !sender.isToggleable && sender.keyText.contains("+") {
+			sendKeyCombo(sender.keyText)
+			return
+		}
 		let isToggleable = sender.isToggleable
 		var isOn = sender.isOn
 

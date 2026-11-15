@@ -49,7 +49,14 @@ class ParsecMetalRenderer: NSObject, MTKViewDelegate {
 	private var drawnFrames = 0
 	private var lastRateSample = CACurrentMediaTime()
 	private var lastDrawAt: CFTimeInterval = 0
-	private var drawIntervals: [CFTimeInterval] = []
+	// fixed ring of recent vsync intervals, no per-frame array shifting
+	private static let intervalCount = 32
+	private var drawIntervals = [CFTimeInterval](repeating: 0, count: ParsecMetalRenderer.intervalCount)
+	private var intervalIndex = 0
+	private var intervalFilled = 0
+	// true when there's something new to put on screen (new frame, resize, reset)
+	private var needsPresent = true
+	private var lastDrawableSize = CGSize.zero
 
 	init?(_ device: MTLDevice, _ updateImage: @escaping () -> Void) {
 		guard let queue = device.makeCommandQueue() else { return nil }
@@ -80,7 +87,9 @@ class ParsecMetalRenderer: NSObject, MTKViewDelegate {
 		planes = [nil, nil, nil]
 		current = -1
 		lastDrawAt = 0
-		drawIntervals.removeAll()
+		intervalIndex = 0
+		intervalFilled = 0
+		needsPresent = true
 	}
 
 	fileprivate func upload(_ f: ParsecFrame, _ image: UnsafeRawPointer) {
@@ -99,6 +108,7 @@ class ParsecMetalRenderer: NSObject, MTKViewDelegate {
 		p.c.replace(region: MTLRegionMake2D(0, 0, (w + 1) / 2, (h + 1) / 2), mipmapLevel: 0, withBytes: image + stride * rows, bytesPerRow: stride)
 		current = slot
 		frameSize = CGSize(width: w, height: h)
+		needsPresent = true
 		if #available(iOS 15.0, *) {
 			PictureInPictureManager.shared.feedFrame(f, image)
 		}
@@ -124,23 +134,34 @@ class ParsecMetalRenderer: NSObject, MTKViewDelegate {
 		if view.drawableSize != size {
 			view.drawableSize = size
 		}
+		if size != lastDrawableSize {
+			lastDrawableSize = size
+			needsPresent = true
+		}
 
 		let tickAt = CACurrentMediaTime()
 		if lastDrawAt > 0 {
-			drawIntervals.append(tickAt - lastDrawAt)
-			if drawIntervals.count > 32 {
-				drawIntervals.removeFirst()
-			}
+			drawIntervals[intervalIndex] = tickAt - lastDrawAt
+			intervalIndex = (intervalIndex + 1) % ParsecMetalRenderer.intervalCount
+			intervalFilled = min(intervalFilled + 1, ParsecMetalRenderer.intervalCount)
 		}
 		lastDrawAt = tickAt
 		var fps = view.preferredFramesPerSecond > 0 ? view.preferredFramesPerSecond : 60
-		if drawIntervals.count == 32, let tick = drawIntervals.min(), tick > 0 {
+		if intervalFilled == ParsecMetalRenderer.intervalCount, let tick = drawIntervals.min(), tick > 0 {
 			fps = max(Int((1 / tick).rounded()), 30)
 		}
 		let timeout = UInt32(max(1000 / fps, 8))
 
 		inFlight.wait()
 		CParsec.pollFrame(timeout: timeout, callback: frameCallback, opaque: Unmanaged.passUnretained(self).toOpaque())
+
+		// nothing new decoded and nothing resized: the layer keeps showing the last frame, so skip
+		// grabbing a drawable (which can block) and the GPU pass entirely
+		guard needsPresent else {
+			inFlight.signal()
+			updateImage()
+			return
+		}
 
 		guard let pass = view.currentRenderPassDescriptor, let drawable = view.currentDrawable,
 			  let cb = queue.makeCommandBuffer(), let enc = cb.makeRenderCommandEncoder(descriptor: pass) else {
@@ -164,6 +185,7 @@ class ParsecMetalRenderer: NSObject, MTKViewDelegate {
 		let sem = inFlight
 		cb.addCompletedHandler { _ in sem.signal() }
 		cb.commit()
+		needsPresent = false
 
 		drawnFrames += 1
 		let now = CACurrentMediaTime()

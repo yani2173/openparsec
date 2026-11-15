@@ -517,12 +517,15 @@ class ParsecSDKBridge: ParsecService {
 	}
 
 	func sendMousePosition(_ x: Int32, _ y: Int32) {
-		mouseInfo.mouseX = ParsecSDKBridge.clamp(x, minValue: 0, maxValue: Int32(self.clientWidth))
-		mouseInfo.mouseY = ParsecSDKBridge.clamp(y, minValue: 0, maxValue: Int32(self.clientHeight))
+		let cx = ParsecSDKBridge.clamp(x, minValue: 0, maxValue: Int32(self.clientWidth))
+		let cy = ParsecSDKBridge.clamp(y, minValue: 0, maxValue: Int32(self.clientHeight))
+		// the host would otherwise get an off-screen point the local cursor never shows
+		mouseInfo.mouseX = cx
+		mouseInfo.mouseY = cy
 		var motionMessage = ParsecMessage()
 		motionMessage.type = MESSAGE_MOUSE_MOTION
-		motionMessage.mouseMotion.x = x
-		motionMessage.mouseMotion.y = y
+		motionMessage.mouseMotion.x = cx
+		motionMessage.mouseMotion.y = cy
 		ParsecClientSendMessage(_parsec, &motionMessage)
 	}
 
@@ -686,15 +689,20 @@ class ParsecSDKBridge: ParsecService {
 		pollGeneration += 1
 		let generation = pollGeneration
 
-		let audio = DispatchWorkItem { [weak self] in
+		// dedicated threads instead of the default-QoS global queue: these loops block inside the SDK
+		// for their whole life, so they'd tie up a shared pool thread and get scheduled behind
+		// background work. userInteractive keeps audio glitch-free and cursor updates prompt.
+		let audio = Thread { [weak self] in
 			while let self = self, self.pollGeneration == generation {
 				if self.pollAudio() == PARSEC_NOT_RUNNING {
 					usleep(50_000)
 				}
 			}
 		}
+		audio.name = "parsec.audio"
+		audio.qualityOfService = .userInteractive
 
-		let event = DispatchWorkItem { [weak self] in
+		let event = Thread { [weak self] in
 			var sawCursor = false
 			while let self = self, self.pollGeneration == generation {
 				if self.pollEvent(sawCursor: &sawCursor) {
@@ -702,9 +710,11 @@ class ParsecSDKBridge: ParsecService {
 				}
 			}
 		}
+		event.name = "parsec.events"
+		event.qualityOfService = .userInteractive
 
-		DispatchQueue.global().async(execute: audio)
-		DispatchQueue.global().async(execute: event)
+		audio.start()
+		event.start()
 	}
 
 	func sendUserData(type: ParsecUserDataType, message: Data) {
