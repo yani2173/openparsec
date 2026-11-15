@@ -71,6 +71,14 @@ struct SettingsView: View {
 									])
 								}
 								CatSlider("Pointer Speed", value: $settings.mouseSensitivity, in: 0.1...4, step: 0.1)
+								CatItem("Pointer Acceleration") {
+									Toggle("", isOn: $settings.pointerAcceleration)
+										.frame(width: 80)
+								}
+								CatItem("Haptic Feedback") {
+									Toggle("", isOn: $settings.hapticFeedback)
+										.frame(width: 80)
+								}
 								CatSlider("Cursor Size", value: $settings.cursorScale, in: 0.1...4, step: 0.1)
 								CatSlider("Scroll Speed", value: $settings.scrollSensitivity, in: 0.5...5, step: 0.5)
 								CatItem("Reverse Scrolling") {

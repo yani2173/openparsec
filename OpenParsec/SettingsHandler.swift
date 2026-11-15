@@ -14,6 +14,8 @@ final class SettingsStore: ObservableObject {
 			"cursorMode": CursorMode.touchpad.rawValue,
 			"cursorScale": 0.5,
 			"mouseSensitivity": 1.0,
+			"pointerAcceleration": true,
+			"hapticFeedback": true,
 			"optionAsCommand": false,
 			"menuSwipeEdge": MenuSwipeEdge.off.rawValue,
 			"noOverlay": false,
@@ -79,6 +81,16 @@ final class SettingsStore: ObservableObject {
 	var mouseSensitivity: Double {
 		get { defaults.double(forKey: "mouseSensitivity") }
 		set { store(newValue, "mouseSensitivity") }
+	}
+
+	var pointerAcceleration: Bool {
+		get { defaults.bool(forKey: "pointerAcceleration") }
+		set { store(newValue, "pointerAcceleration") }
+	}
+
+	var hapticFeedback: Bool {
+		get { defaults.bool(forKey: "hapticFeedback") }
+		set { store(newValue, "hapticFeedback") }
 	}
 
 	var optionAsCommand: Bool {
@@ -180,6 +192,8 @@ struct SettingsHandler {
 	static var cursorMode: CursorMode { get { SettingsStore.shared.cursorMode } set { SettingsStore.shared.cursorMode = newValue } }
 	static var cursorScale: Double { get { SettingsStore.shared.cursorScale } set { SettingsStore.shared.cursorScale = newValue } }
 	static var mouseSensitivity: Double { get { SettingsStore.shared.mouseSensitivity } set { SettingsStore.shared.mouseSensitivity = newValue } }
+	static var pointerAcceleration: Bool { get { SettingsStore.shared.pointerAcceleration } set { SettingsStore.shared.pointerAcceleration = newValue } }
+	static var hapticFeedback: Bool { get { SettingsStore.shared.hapticFeedback } set { SettingsStore.shared.hapticFeedback = newValue } }
 	static var optionAsCommand: Bool { get { SettingsStore.shared.optionAsCommand } set { SettingsStore.shared.optionAsCommand = newValue } }
 	static var menuSwipeEdge: MenuSwipeEdge { get { SettingsStore.shared.menuSwipeEdge } set { SettingsStore.shared.menuSwipeEdge = newValue } }
 	static var noOverlay: Bool { get { SettingsStore.shared.noOverlay } set { SettingsStore.shared.noOverlay = newValue } }
