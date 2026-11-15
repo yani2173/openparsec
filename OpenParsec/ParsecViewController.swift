@@ -1356,11 +1356,7 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 			keyboardCoversPicture = keyboardHeight > 0
 			updatePanHandle()
 		}
-		var newOff = CGPoint(x: contentX * newZoom - anchor.x, y: contentY * newZoom - anchor.y)
-		let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
-		let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height)
-		newOff.x = min(max(0, newOff.x), maxX)
-		newOff.y = min(max(0, newOff.y), maxY)
+		let newOff = clampedViewportOffset(CGPoint(x: contentX * newZoom - anchor.x, y: contentY * newZoom - anchor.y))
 		scrollView.setContentOffset(newOff, animated: false)
 		positionCursorOverlay()
 		// the touch modes put the pointer under the finger, there's no cursor to keep in view
@@ -1376,10 +1372,43 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		positionCursorOverlay()
 	}
 
-	private func clampToContent(_ p: CGPoint) -> CGPoint {
+	// Where the PC picture sits inside the view (unzoomed points): the stream is fitted with black
+	// bars above and below (or left and right), centred, the same way the bridge carries the cursor.
+	var videoRect: CGRect {
 		let w = view.bounds.width
 		let h = view.bounds.height
-		return CGPoint(x: min(max(0, p.x), w), y: min(max(0, p.y), h))
+		let hostW = CGFloat(CParsec.hostWidth)
+		let hostH = CGFloat(CParsec.hostHeight)
+		guard w > 0, h > 0, hostW > 0, hostH > 0 else { return CGRect(x: 0, y: 0, width: w, height: h) }
+		let scale = min(w / hostW, h / hostH)
+		let pw = hostW * scale
+		let ph = hostH * scale
+		return CGRect(x: (w - pw) / 2, y: (h - ph) / 2, width: pw, height: ph)
+	}
+
+	// keeps the cursor (and every click) on the picture, never out in the black bars
+	private func clampToContent(_ p: CGPoint) -> CGPoint {
+		let r = videoRect
+		return CGPoint(x: min(max(r.minX, p.x), r.maxX), y: min(max(r.minY, p.y), r.maxY))
+	}
+
+	// A zoomed view offset kept on the picture: when the picture is bigger than the screen on an
+	// axis it can't scroll past the picture's edge into the black bar, when it's smaller it stays
+	// centred. Without this the cursor could drag the view out into the black and get lost there.
+	private func clampedViewportOffset(_ p: CGPoint) -> CGPoint {
+		let zoom = scrollView.zoomScale
+		let bottomInset = keyboardVisible ? keyboardHeight : 0.0
+		let visibleWidth = view.bounds.width
+		let visibleHeight = view.bounds.height - bottomInset
+		let maxX = max(0, scrollView.contentSize.width - visibleWidth)
+		let maxY = max(0, scrollView.contentSize.height - visibleHeight)
+		let r = videoRect
+		func axis(_ v: CGFloat, _ lo: CGFloat, _ hi: CGFloat, _ visible: CGFloat, _ limit: CGFloat) -> CGFloat {
+			let target = hi - lo <= visible ? (lo + hi - visible) / 2 : min(max(lo, v), hi - visible)
+			return min(max(0, target), limit)
+		}
+		return CGPoint(x: axis(p.x, r.minX * zoom, r.maxX * zoom, visibleWidth, maxX),
+					   y: axis(p.y, r.minY * zoom, r.maxY * zoom, visibleHeight, maxY))
 	}
 
 	// Places the cursor overlay at the cursor's content position projected into screen space,
@@ -1469,10 +1498,8 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 	// Two-finger pan mode: drag the zoomed picture around instead of scrolling the PC.
 	private func panViewport(by delta: CGPoint) {
 		let bottomInset = keyboardVisible ? keyboardHeight : 0.0
-		let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
-		let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height + bottomInset)
 		let off = scrollView.contentOffset
-		let next = CGPoint(x: min(max(0, off.x + delta.x), maxX), y: min(max(0, off.y + delta.y), maxY))
+		let next = clampedViewportOffset(CGPoint(x: off.x + delta.x, y: off.y + delta.y))
 		guard next != off else { return }
 		scrollView.setContentOffset(next, animated: false)
 		if SettingsHandler.cursorMode == .touchpad {
@@ -1632,13 +1659,9 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 		let visibleHeight = view.bounds.height - bottomInset
 		let cursorX = cursorContentPos.x * zoom
 		let cursorY = cursorContentPos.y * zoom
-		var targetX = cursorX - visibleWidth / 2
-		var targetY = cursorY - visibleHeight / 2
-		let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
-		let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height + bottomInset)
-		targetX = min(max(0, targetX), maxX)
-		targetY = min(max(0, targetY), maxY)
-		scrollView.setContentOffset(CGPoint(x: targetX, y: targetY), animated: false)
+		let target = clampedViewportOffset(CGPoint(x: cursorX - visibleWidth / 2, y: cursorY - visibleHeight / 2))
+		guard target != scrollView.contentOffset else { return }
+		scrollView.setContentOffset(target, animated: false)
 	}
 
 	private func edgeScrollVelocity(at p: CGPoint) -> CGPoint {
@@ -1659,11 +1682,8 @@ extension ParsecViewController: UIGestureRecognizerDelegate {
 	private func stepEdgeScroll(_ dt: CGFloat) -> Bool {
 		let v = edgeScrollVelocity(at: edgeScrollPoint)
 		guard v != .zero, !CParsec.mouseInfo.mousePositionRelative else { return false }
-		let bottomInset = keyboardVisible ? keyboardHeight : 0.0
-		let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
-		let maxY = max(0, scrollView.contentSize.height - scrollView.bounds.height + bottomInset)
 		let off = scrollView.contentOffset
-		let next = CGPoint(x: min(max(0, off.x + v.x * dt), maxX), y: min(max(0, off.y + v.y * dt), maxY))
+		let next = clampedViewportOffset(CGPoint(x: off.x + v.x * dt, y: off.y + v.y * dt))
 		guard next != off else { return false }
 		scrollView.setContentOffset(next, animated: false)
 		cursorContentPos = clampToContent(contentView.convert(edgeScrollPoint, from: view))
