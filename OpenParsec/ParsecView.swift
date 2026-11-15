@@ -270,12 +270,13 @@ struct MenuRowsHeightKey: PreferenceKey {
 	}
 }
 
-// one entry in the floating quick actions stack
+// one tile in the control panel
 struct QuickAction: Identifiable {
 	let id: String
 	let icon: String
 	let label: String
 	var destructive: Bool = false
+	var active: Bool = false
 	let run: () -> Void
 }
 
@@ -293,11 +294,9 @@ struct ParsecView: View {
 	@State var hint: String?
 	@State var showMenu: Bool = false
 	@State var menuRowsHeight: CGFloat = 0
-	@ScaledMetric var menuWidth: CGFloat = 230
 	@AppStorage("menuSwipeHintShown") var menuSwipeHintShown: Bool = false
 
 	@State var showKeyboard: Bool = false
-	@State var quickActionsOpen: Bool = false
 	@State var showModePicker: Bool = false
 	@State var modeRowsHeight: CGFloat = 0
 	@State var cursorModeAtOpen: CursorMode = .touchpad
@@ -419,16 +418,16 @@ struct ParsecView: View {
 					.zIndex(3)
 			}
 
-			if quickActionsOpen {
-				// tap anywhere to fold the actions away again
-				Color.black.opacity(0.15)
+			if showMenu {
+				// tap anywhere to fold the panel away again
+				Color.black.opacity(0.2)
 					.edgesIgnoringSafeArea(.all)
-					.onTapGesture { setQuickActions(open: false) }
+					.onTapGesture { setMenu(open: false) }
 					.zIndex(4)
 			}
 
-			if settingsStore.showQuickActions && !hideOverlay {
-				quickActionsButton
+			if !hideOverlay || showMenu {
+				controlPanel
 					.zIndex(5)
 			}
 
@@ -437,64 +436,6 @@ struct ParsecView: View {
 					.transition(.opacity.combined(with: .scale(scale: 0.96)))
 					.zIndex(6)
 			}
-
-			HStack(alignment: .top, spacing: 0) {
-				VStack {
-					if !hideOverlay {
-						HStack {
-							Button(action: {
-								if showMenu {
-									showMenu = false
-								} else {
-									showMenu = true
-									ParsecView.getHostUserData()
-								}
-							}) {
-								Image("IconTransparent")
-									.resizable()
-									.aspectRatio(contentMode: .fit)
-									.frame(width: 48, height: 48)
-									.liquidGlass(in: glassRounded(8, glass: 16), interactive: true, fallback: Color("BackgroundPrompt").opacity(showMenu ? 0.75 : 1))
-									.opacity(showMenu ? 1 : (supportsLiquidGlass ? 0.45 : 0.25))
-							}
-							.padding()
-							.edgesIgnoringSafeArea(.all)
-							Spacer()
-						}
-					}
-					if !hideKeyboardButton {
-						HStack {
-							Button(action: toggleKeyboard) {
-								Image(systemName: "keyboard")
-									.resizable()
-									.aspectRatio(contentMode: .fit)
-									.frame(width: 32, height: 32)
-									.foregroundColor(Color("Foreground"))
-									.padding(8)
-									.liquidGlass(in: glassRounded(8, glass: 16), interactive: true, tint: showKeyboard ? Color("AccentColor").opacity(0.5) : nil, fallback: Color("BackgroundPrompt").opacity(showKeyboard ? 0.75 : 0.5))
-							}
-							.padding(.leading)
-							.edgesIgnoringSafeArea(.all)
-							Spacer()
-						}
-					}
-					if showMenu && verticalSizeClass != .compact {
-						HStack {
-							menuPanel
-							Spacer()
-						}
-						.layoutPriority(1)
-					}
-					Spacer()
-				}
-				.fixedSize(horizontal: showMenu && verticalSizeClass == .compact, vertical: false)
-				if showMenu && verticalSizeClass == .compact {
-					menuPanel
-						.padding(.top)
-					Spacer()
-				}
-			}
-			.zIndex(2)
 		}
 		.statusBarHidden(SettingsHandler.hideStatusBar)
 		.alert(isPresented: $showDCAlert) {
@@ -539,210 +480,254 @@ struct ParsecView: View {
 
 	}
 
-	var menuPanel: some View {
-		VStack(spacing: 3) {
-			ScrollView {
-				VStack(spacing: 3) {
-					Button(action: disableOverlay) {
-						Text("Hide Buttons")
-							.padding(8)
-							.frame(maxWidth: .infinity)
-							.multilineTextAlignment(.center)
-					}
-					Button(action: toggleMute) {
-						Text("Sound: \(muted ? "OFF" : "ON")")
-							.padding(8)
-							.frame(maxWidth: .infinity)
-							.multilineTextAlignment(.center)
-					}
-					Menu {
-						ForEach(resolutions, id: \.self) { resolution in
-							Button(action: {
-								changeResolution(res: resolution)
-							}) {
-								if resolution.width == dataModel.resolutionX && resolution.height == dataModel.resolutionY {
-									Label(resolution.desc, systemImage: "checkmark")
-								} else {
-									Text(resolution.desc)
-								}
-							}
-						}
-					} label: {
-						Text("Resolution")
-							.padding(8)
-							.frame(maxWidth: .infinity)
-							.multilineTextAlignment(.center)
-					}
-					Menu {
-						Button(action: {
-							changeBitRate(bitrate: 0)
-						}) {
-							if settingsStore.bitrate == 0 {
-								Label("Host Default", systemImage: "checkmark")
-							} else {
-								Text("Host Default")
-							}
-						}
-						ForEach(bitrates, id: \.self) { bitrate in
-							Button(action: {
-								changeBitRate(bitrate: bitrate)
-							}) {
-								if bitrate == settingsStore.bitrate {
-									Label("\(bitrate) Mbps", systemImage: "checkmark")
-								} else {
-									Text("\(bitrate) Mbps")
-								}
-							}
-						}
-					} label: {
-						Text("Bitrate")
-							.padding(8)
-							.frame(maxWidth: .infinity)
-							.multilineTextAlignment(.center)
-					}
-					if DataManager.model.displayConfigs.count > 1 {
-						Menu {
-							Button("Auto") {
-								changeDisplay(displayId: "none")
-							}
-							ForEach(DataManager.model.displayConfigs, id: \.self) { config in
-								Button("\(config.name) \(config.adapterName)") {
-									changeDisplay(displayId: config.id)
-								}
-							}
-						} label: {
-							Text("Switch Display")
-								.padding(8)
-								.frame(maxWidth: .infinity)
-								.multilineTextAlignment(.center)
-						}
-					}
-
-					Button(action: toggleConstantFps) {
-						Text("Constant Frame Rate: \(dataModel.constantFps ? "ON" : "OFF")")
-							.padding(8)
-							.frame(maxWidth: .infinity)
-							.multilineTextAlignment(.center)
-					}
-					Button(action: toggleZoom) {
-						Text("Pinch to Zoom: \(zoomEnabled ? "ON" : "OFF")")
-							.padding(8)
-							.frame(maxWidth: .infinity)
-							.multilineTextAlignment(.center)
-					}
-					Button(action: openModePicker) {
-						Text("Touch Input: \(settingsStore.cursorMode.title)")
-							.padding(8)
-							.frame(maxWidth: .infinity)
-							.multilineTextAlignment(.center)
-					}
-					Button(action: openSettings) {
-						Text("Settings")
-							.padding(8)
-							.frame(maxWidth: .infinity)
-							.multilineTextAlignment(.center)
-					}
-				}
-				.background(GeometryReader { proxy in
-					Color.clear.preference(key: MenuRowsHeightKey.self, value: proxy.size.height)
-				})
-			}
-			.frame(maxHeight: menuRowsHeight)
-			.onPreferenceChange(MenuRowsHeightKey.self) { menuRowsHeight = $0 }
-			Rectangle()
-				.fill(Color("Foreground"))
-				.opacity(0.25)
-				.frame(height: 1)
-			Button(action: { disconnect()}) {
-				Text("Disconnect")
-					.foregroundColor(.red)
-					.padding(8)
-					.frame(maxWidth: .infinity)
-					.multilineTextAlignment(.center)
-			}
-		}
-		.liquidGlass(in: glassRounded(8, glass: 22), fallback: Color("BackgroundPrompt").opacity(0.75))
-		.foregroundColor(Color("Foreground"))
-		.frame(maxWidth: menuWidth)
-		.padding(.horizontal)
-		// .edgesIgnoringSafeArea(.all)
-	}
-
-	// MARK: - Quick actions
-	// A floating button in the bottom corner that fans out into the controls you reach for most
-	// while driving a PC from a phone, one tap each, no menu digging.
+	// MARK: - Control panel
+	// One button in the corner opens everything: the actions you reach for most as tiles on top,
+	// the stream's own settings as rows under them, Disconnect at the bottom.
 
 	var quickActions: [QuickAction] {
 		let mode = settingsStore.cursorMode
 		var list = [
-			QuickAction(id: "keyboard", icon: "keyboard", label: showKeyboard ? "Hide Keyboard" : "Keyboard", run: toggleKeyboard),
-			QuickAction(id: "mode", icon: mode.icon, label: "Touch Input: \(mode.shortTitle)", run: openModePicker),
+			QuickAction(id: "keyboard", icon: "keyboard", label: "Keyboard", active: showKeyboard, run: toggleKeyboard),
+			QuickAction(id: "mode", icon: mode.icon, label: mode.shortTitle, run: openModePicker),
 			QuickAction(id: "cad", icon: "lock.shield", label: "Ctrl+Alt+Del", run: { parsecViewController.sendKeyCombo("CONTROL+LALT+DELETE") }),
-			QuickAction(id: "start", icon: "square.grid.2x2", label: "Start Menu", run: { parsecViewController.sendKeyCombo("LGUI") }),
+			QuickAction(id: "start", icon: "square.grid.2x2", label: "Start", run: { parsecViewController.sendKeyCombo("LGUI") }),
 			// asks the host to switch to this phone's screen size, so the desktop fills it edge to edge
-			QuickAction(id: "resize", icon: "arrow.up.left.and.arrow.down.right", label: "Resize Desktop to Fit", run: { changeResolution(res: .client) })
+			QuickAction(id: "resize", icon: "arrow.up.left.and.arrow.down.right", label: "Resize to Fit", run: { changeResolution(res: .client) })
 		]
 		// only the modes that can zoom the picture need a way back to the whole desktop
 		if (mode == .touchpad && zoomEnabled) || mode == .twoFingerPanZoom || mode == .threeFingerPanZoom {
 			list.append(QuickAction(id: "fit", icon: "arrow.down.right.and.arrow.up.left", label: "Fit to Screen", run: { parsecViewController.resetZoom() }))
 		}
-		list.append(QuickAction(id: "menu", icon: "list.bullet", label: "Stream Menu", run: {
-			showMenu = true
-			ParsecView.getHostUserData()
-		}))
-		list.append(QuickAction(id: "disconnect", icon: "power", label: "Disconnect", destructive: true, run: { disconnect() }))
 		return list
 	}
 
-	func setQuickActions(open: Bool) {
-		withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-			quickActionsOpen = open
+	func setMenu(open: Bool) {
+		if open {
+			showModePicker = false
+			ParsecView.getHostUserData()
+		}
+		withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+			showMenu = open
 		}
 	}
 
-	var quickActionsButton: some View {
+	func runQuickAction(_ action: QuickAction) {
+		setMenu(open: false)
+		action.run()
+	}
+
+	var controlPanel: some View {
 		GeometryReader { proxy in
-			VStack(alignment: .trailing, spacing: 10) {
-				if quickActionsOpen {
-					ForEach(quickActions) { action in
-						Button(action: {
-							setQuickActions(open: false)
-							action.run()
-						}) {
-							HStack(spacing: 8) {
-								Text(action.label)
-									.foregroundColor(action.destructive ? .red : Color("Foreground"))
-									.font(.system(size: 13, weight: .medium))
-									.lineLimit(1)
-									.padding(.horizontal, 10)
-									.padding(.vertical, 6)
-									.liquidGlass(in: Capsule(), fallback: Color("BackgroundPrompt").opacity(0.85))
-								Image(systemName: action.icon)
-									.font(.system(size: 18, weight: .medium))
-									.foregroundColor(action.destructive ? .red : Color("Foreground"))
-									.frame(width: 44, height: 44)
-									.liquidGlass(in: Circle(), interactive: true, fallback: Color("BackgroundPrompt").opacity(0.85))
-							}
+			let top = max(proxy.safeAreaInsets.top, 12) + 8
+			let bottom = max(proxy.safeAreaInsets.bottom, 12) + 12
+			let width = min(320, proxy.size.width - proxy.safeAreaInsets.leading - proxy.safeAreaInsets.trailing - 32)
+			Group {
+				if verticalSizeClass == .compact {
+					// landscape: the panel sits beside the button, above it would not fit
+					HStack(alignment: .bottom, spacing: 12) {
+						if showMenu {
+							panelCard(width: width, maxHeight: proxy.size.height - top - bottom)
+								.transition(.scale(scale: 0.92, anchor: .bottomTrailing).combined(with: .opacity))
 						}
-						.accessibilityLabel(Text(action.label))
-						.transition(.move(edge: .bottom).combined(with: .opacity))
+						menuToggle
+					}
+				} else {
+					VStack(alignment: .trailing, spacing: 12) {
+						if showMenu {
+							panelCard(width: width, maxHeight: proxy.size.height - top - bottom - 52 - 12)
+								.transition(.scale(scale: 0.92, anchor: .bottomTrailing).combined(with: .opacity))
+						}
+						menuToggle
 					}
 				}
-				Button(action: { setQuickActions(open: !quickActionsOpen) }) {
-					Image(systemName: quickActionsOpen ? "xmark" : "ellipsis")
-						.font(.system(size: 20, weight: .semibold))
-						.frame(width: 52, height: 52)
-						.liquidGlass(in: Circle(), interactive: true, tint: quickActionsOpen ? Color("AccentColor").opacity(0.6) : nil, fallback: Color("BackgroundPrompt").opacity(0.85))
-						.opacity(quickActionsOpen ? 1 : (supportsLiquidGlass ? 0.6 : 0.45))
-				}
-				.accessibilityLabel(Text(quickActionsOpen ? "Close quick actions" : "Quick actions"))
 			}
-			.foregroundColor(Color("Foreground"))
 			// the stream ignores the safe area, the button must not sit under the home bar or notch
 			.padding(.trailing, proxy.safeAreaInsets.trailing + 16)
-			.padding(.bottom, max(proxy.safeAreaInsets.bottom, 12) + 12)
+			.padding(.bottom, bottom)
 			.frame(width: proxy.size.width, height: proxy.size.height, alignment: .bottomTrailing)
 		}
+	}
+
+	var menuToggle: some View {
+		Button(action: { setMenu(open: !showMenu) }) {
+			Image(systemName: showMenu ? "xmark" : "ellipsis")
+				.font(.system(size: 20, weight: .semibold))
+				.foregroundColor(Color("Foreground"))
+				.frame(width: 52, height: 52)
+				.liquidGlass(in: Circle(), interactive: true, tint: showMenu ? Color("AccentColor").opacity(0.6) : nil, fallback: Color("BackgroundPrompt").opacity(0.85))
+				.opacity(showMenu ? 1 : (supportsLiquidGlass ? 0.6 : 0.45))
+		}
+		.accessibilityLabel(Text(showMenu ? "Close menu" : "Menu"))
+	}
+
+	func panelCard(width: CGFloat, maxHeight: CGFloat) -> some View {
+		ScrollView {
+			VStack(spacing: 12) {
+				LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+					ForEach(quickActions) { action in
+						actionTile(action)
+					}
+				}
+				VStack(spacing: 0) {
+					streamRows
+				}
+				.background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color("Foreground").opacity(0.06)))
+				Button(action: { setMenu(open: false); disconnect() }) {
+					HStack(spacing: 8) {
+						Image(systemName: "power")
+						Text("Disconnect")
+					}
+					.font(.system(size: 15, weight: .semibold))
+					.foregroundColor(.red)
+					.frame(maxWidth: .infinity, minHeight: 44)
+					.background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.red.opacity(0.14)))
+					.contentShape(Rectangle())
+				}
+				.buttonStyle(PlainButtonStyle())
+			}
+			.padding(12)
+			.background(GeometryReader { inner in
+				Color.clear.preference(key: MenuRowsHeightKey.self, value: inner.size.height)
+			})
+		}
+		.frame(width: width)
+		.frame(maxHeight: min(menuRowsHeight, max(maxHeight, 160)))
+		.onPreferenceChange(MenuRowsHeightKey.self) { menuRowsHeight = $0 }
+		.foregroundColor(Color("Foreground"))
+		.liquidGlass(in: glassRounded(14, glass: 28), fallback: Color("BackgroundPrompt").opacity(0.94))
+	}
+
+	func actionTile(_ action: QuickAction) -> some View {
+		Button(action: { runQuickAction(action) }) {
+			VStack(spacing: 6) {
+				Image(systemName: action.icon)
+					.font(.system(size: 19, weight: .medium))
+					.foregroundColor(action.active ? .white : Color("Foreground"))
+					.frame(width: 46, height: 46)
+					.background(Circle().fill(action.active ? Color("AccentColor") : Color("Foreground").opacity(0.1)))
+				Text(action.label)
+					.font(.system(size: 11, weight: .medium))
+					.lineLimit(2)
+					.multilineTextAlignment(.center)
+					.fixedSize(horizontal: false, vertical: true)
+			}
+			.frame(maxWidth: .infinity, minHeight: 84, alignment: .top)
+			.padding(.top, 4)
+			.contentShape(Rectangle())
+		}
+		.buttonStyle(PlainButtonStyle())
+		.foregroundColor(Color("Foreground"))
+		.accessibilityLabel(Text(action.label))
+	}
+
+	func panelRow(_ title: String, icon: String, value: String? = nil, chevron: Bool = false) -> some View {
+		HStack(spacing: 12) {
+			Image(systemName: icon)
+				.font(.system(size: 15, weight: .medium))
+				.foregroundColor(Color("AccentColor"))
+				.frame(width: 22)
+			Text(title)
+				.lineLimit(1)
+			Spacer(minLength: 6)
+			if let value = value {
+				Text(value)
+					.lineLimit(1)
+					.opacity(0.55)
+			}
+			if chevron {
+				Image(systemName: "chevron.up.chevron.down")
+					.font(.system(size: 11, weight: .semibold))
+					.opacity(0.4)
+			}
+		}
+		.font(.system(size: 15))
+		.foregroundColor(Color("Foreground"))
+		.padding(.horizontal, 12)
+		.frame(minHeight: 44)
+		.contentShape(Rectangle())
+	}
+
+	var currentResolutionLabel: String? {
+		resolutions.first { $0.width == dataModel.resolutionX && $0.height == dataModel.resolutionY }?.desc
+	}
+
+	@ViewBuilder var streamRows: some View {
+		Button(action: toggleMute) {
+			panelRow("Sound", icon: muted ? "speaker.slash.fill" : "speaker.wave.2.fill", value: muted ? "Off" : "On")
+		}
+		.buttonStyle(PlainButtonStyle())
+		Menu {
+			ForEach(resolutions, id: \.self) { resolution in
+				Button(action: {
+					changeResolution(res: resolution)
+				}) {
+					if resolution.width == dataModel.resolutionX && resolution.height == dataModel.resolutionY {
+						Label(resolution.desc, systemImage: "checkmark")
+					} else {
+						Text(resolution.desc)
+					}
+				}
+			}
+		} label: {
+			panelRow("Resolution", icon: "display", value: currentResolutionLabel, chevron: true)
+		}
+		Menu {
+			Button(action: {
+				changeBitRate(bitrate: 0)
+			}) {
+				if settingsStore.bitrate == 0 {
+					Label("Host Default", systemImage: "checkmark")
+				} else {
+					Text("Host Default")
+				}
+			}
+			ForEach(bitrates, id: \.self) { bitrate in
+				Button(action: {
+					changeBitRate(bitrate: bitrate)
+				}) {
+					if bitrate == settingsStore.bitrate {
+						Label("\(bitrate) Mbps", systemImage: "checkmark")
+					} else {
+						Text("\(bitrate) Mbps")
+					}
+				}
+			}
+		} label: {
+			panelRow("Bitrate", icon: "chart.bar.fill", value: settingsStore.bitrate == 0 ? "Default" : "\(settingsStore.bitrate) Mbps", chevron: true)
+		}
+		if DataManager.model.displayConfigs.count > 1 {
+			Menu {
+				Button("Auto") {
+					changeDisplay(displayId: "none")
+				}
+				ForEach(DataManager.model.displayConfigs, id: \.self) { config in
+					Button("\(config.name) \(config.adapterName)") {
+						changeDisplay(displayId: config.id)
+					}
+				}
+			} label: {
+				panelRow("Switch Display", icon: "rectangle.on.rectangle", chevron: true)
+			}
+		}
+		Button(action: toggleConstantFps) {
+			panelRow("Constant Frame Rate", icon: "timer", value: dataModel.constantFps ? "On" : "Off")
+		}
+		.buttonStyle(PlainButtonStyle())
+		if settingsStore.cursorMode == .touchpad {
+			// the other touch modes always zoom the view (or never, in Direct Touch)
+			Button(action: toggleZoom) {
+				panelRow("Pinch to Zoom", icon: "plus.magnifyingglass", value: zoomEnabled ? "On" : "Off")
+			}
+			.buttonStyle(PlainButtonStyle())
+		}
+		Button(action: { setMenu(open: false); disableOverlay() }) {
+			panelRow("Hide Button", icon: "eye.slash")
+		}
+		.buttonStyle(PlainButtonStyle())
+		Button(action: openSettings) {
+			panelRow("Settings", icon: "gearshape.fill")
+		}
+		.buttonStyle(PlainButtonStyle())
 	}
 
 	// MARK: - Touch input chooser
@@ -762,6 +747,7 @@ struct ParsecView: View {
 		closeModePicker()
 		guard SettingsHandler.cursorMode != mode else { return }
 		SettingsHandler.cursorMode = mode
+		HostPrefs.save(for: ParsecBackgroundManager.shared.lastPeerId)
 		parsecViewController.applyCursorMode()
 		UISelectionFeedbackGenerator().selectionChanged()
 		withAnimation { hint = mode.title }
@@ -937,7 +923,7 @@ struct ParsecView: View {
 		ParsecView.getHostUserData()
 
 		hideOverlay = SettingsHandler.noOverlay
-		hideKeyboardButton = !SettingsHandler.showKeyboardButton
+		hideKeyboardButton = hideOverlay
 		parsecViewController.updateMenuEdgeSwipe(menuHidden: hideOverlay)
 		offerHint()
 
@@ -946,8 +932,8 @@ struct ParsecView: View {
 		let menuShown = $showMenu
 		parsecViewController.onMenuEdgeSwipe = {
 			overlayHidden.wrappedValue = false
-			keyboardButtonHidden.wrappedValue = !SettingsHandler.showKeyboardButton
-			menuShown.wrappedValue = true
+			keyboardButtonHidden.wrappedValue = false
+			withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) { menuShown.wrappedValue = true }
 			ParsecView.getHostUserData()
 		}
 
@@ -990,7 +976,7 @@ struct ParsecView: View {
 		parsecViewController.updatePanHandle()
 		parsecViewController.positionCursorOverlay()
 		hideOverlay = SettingsHandler.noOverlay
-		hideKeyboardButton = !SettingsHandler.showKeyboardButton
+		hideKeyboardButton = hideOverlay
 		parsecViewController.updateMenuEdgeSwipe(menuHidden: hideOverlay)
 		offerHint()
 
@@ -1006,6 +992,7 @@ struct ParsecView: View {
 		}
 		if hostConfigChanged { CParsec.updateHostVideoConfig() }
 		if SettingsHandler.bitrate != bitrateAtOpen { applyBitrate() }
+		HostPrefs.save(for: ParsecBackgroundManager.shared.lastPeerId)
 		if SettingsHandler.preferredFramesPerSecond != fpsAtOpen { parsecViewController.applyFrameRate() }
 		if SettingsHandler.enablePiP != pipAtOpen {
 			ParsecBackgroundManager.shared.reconnectPending = true
@@ -1114,6 +1101,7 @@ struct ParsecView: View {
 
 	func changeResolution(res: ParsecResolution) {
         SettingsHandler.resolution = res
+		HostPrefs.save(for: ParsecBackgroundManager.shared.lastPeerId)
 		DispatchQueue.main.async {
 			DataManager.model.resolutionX = res.width
 			DataManager.model.resolutionY = res.height
@@ -1123,6 +1111,7 @@ struct ParsecView: View {
 
 	func changeBitRate(bitrate: Int) {
 		SettingsHandler.bitrate = bitrate
+		HostPrefs.save(for: ParsecBackgroundManager.shared.lastPeerId)
 		applyBitrate()
 	}
 

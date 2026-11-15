@@ -78,6 +78,7 @@ class ParsecBackgroundManager {
 		lastPeerId = peerId
 		lastHostname = hostname
 		resumeOnLaunch = true
+		HostPrefs.save(for: peerId)
 	}
 
 	func connectionDidEnd() {

@@ -21,7 +21,7 @@ OpenParsec is built against iOS 14 and later.
 OpenParsec will never support App Store distribution as it bundles the Parsec SDK, which can't be redistributed under App Store policies.
 
 ## Touch Control
-There are four touch input modes, the same set Chrome Remote Desktop offers on a phone. Pick one in Settings → Touch Input, from the quick actions button or from the stream menu (Touch Input). Every mode is sent to the PC as mouse, wheel and keyboard input, so it works on any Windows or Mac host.
+There are four touch input modes, the same set Chrome Remote Desktop offers on a phone. Pick one in Settings → Touch Input or from the stream menu (the round button). Every mode is sent to the PC as mouse, wheel and keyboard input, so it works on any Windows or Mac host.
 
 | | Trackpad | Direct Touch | Two-Finger Pan & Zoom | Three-Finger Pan & Zoom |
 | --- | --- | --- | --- | --- |
@@ -44,12 +44,12 @@ Common to all modes:
 | Gesture | Action |
 | --- | --- |
 | 3-finger tap | Middle click (or the keyboard, Settings → Three-Finger Tap) |
-| 3-finger swipe up / down | Show / hide the keyboard (opens the stream menu when it's already hidden). Not in Three-Finger Pan & Zoom |
+| 3-finger swipe up / down | Show / hide the keyboard (opens the menu when it's already hidden). Not in Three-Finger Pan & Zoom |
 | Swipe in from the left edge | Stream menu, when the buttons are hidden |
 
 In Trackpad mode, Settings → Two-Finger Drag can move the zoomed picture instead of scrolling, and Pinch to Zoom turns view zoom on or off.
 
-The round button in the bottom-right corner opens quick actions: Keyboard, Touch Input, Ctrl+Alt+Del, Start Menu, Resize Desktop to Fit, Fit to Screen (in modes that zoom the view), Stream Menu and Disconnect. It hides with the other buttons and can be turned off in Settings.
+Everything during a stream lives behind one round button in the bottom-right corner. It opens a single panel: tiles for Keyboard, Touch Input, Ctrl+Alt+Del, Start, Resize to Fit and Fit to Screen (in modes that zoom the view) on top, then Sound, Resolution, Bitrate, Switch Display, Constant Frame Rate, Pinch to Zoom (Trackpad mode), Hide Button and Settings, and Disconnect at the bottom. In landscape the panel opens beside the button. Hide Button (or Settings → Show Menu Button) clears the screen completely; swipe in from the edge or down with three fingers to bring the menu back.
 
 Every click shows a short ripple where it landed (blue for right/middle clicks and drags). Click Ripple turns it off.
 
@@ -57,8 +57,15 @@ Pointer Acceleration (on by default) makes slow finger movement precise and fast
 
 The keyboard bar has one-tap shortcuts: Copy, Paste, Cut, Undo, Select All, Alt+Tab, Show Desktop, Task Manager, plus Home/End/Page Up/Page Down. With Option Key as Command on (Mac hosts) Copy/Paste/Cut/Undo/Select All use ⌘ instead of Ctrl and Alt+Tab becomes ⌘+Tab; Show Desktop and Task Manager are Windows shortcuts.
 
+Above it sits the extra keys row: Esc, Tab, Ctrl, Alt, Shift, Win, Del and the arrow keys. Ctrl, Alt, Shift and Win stay held (lit up) until you tap them again, so they combine with any other key. With Option Key as Command on they read Cmd and Opt. Settings → Extra Keys Row puts them back into the single bar.
+
+## Computers
+The host list puts favourites first (tap the star on a card, or long-press it), then computers nobody is using, then the rest by name. With more than one computer a search box filters by computer or owner name.
+
+With Remember per Computer on (the default), the touch input mode, resolution and bitrate you use on a computer are saved for that computer and come back the next time you connect to it.
+
 ## Liquid Glass
-On iOS 26 and later OpenParsec uses Apple's Liquid Glass material: the stream menu, menu and keyboard buttons, stats bar, keyboard key bar, hint bubbles, the Touch Input chooser, the main screen's top and bottom bars (the host list scrolls underneath them), and the Connect, Login and Close buttons. Older iOS versions keep the classic flat look. Liquid Glass needs a build made with Xcode 26 or newer, which CI uses.
+On iOS 26 and later OpenParsec uses Apple's Liquid Glass material: the stream menu and its button, stats bar, keyboard key bar, hint bubbles, the Touch Input chooser, the main screen's top and bottom bars (the host list scrolls underneath them), and the Connect, Login and Close buttons. Older iOS versions keep the classic flat look. Liquid Glass needs a build made with Xcode 26 or newer, which CI uses.
 
 ## Mouse & Keyboard
 Hardware mice and keyboards are supported.

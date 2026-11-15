@@ -5,6 +5,8 @@ struct MainView: View {
 	var controller: ContentView?
 
 	@State private var page: Page = .hosts
+	@ObservedObject private var settings = SettingsStore.shared
+	@State private var hostSearch: String = ""
 
 	// Host page vars
 	@State var hostCountStr: String = "0 hosts"
@@ -274,8 +276,17 @@ struct MainView: View {
 						.padding(24)
 						.frame(maxWidth: 400)
 					}
+					if hosts.count > 1 {
+						hostSearchField
+					}
+					if !hosts.isEmpty && shownHosts.isEmpty {
+						Text("No computers match: " + hostSearch)
+							.font(.system(size: 14))
+							.opacity(0.6)
+							.padding(.vertical, 20)
+					}
 					LazyVGrid(columns: [GridItem(.adaptive(minimum: 300, maximum: 440), spacing: 14)], spacing: 14) {
-						ForEach(hosts) { i in
+						ForEach(shownHosts) { i in
 							hostCard(i)
 						}
 					}
@@ -370,6 +381,62 @@ struct MainView: View {
 		}
 	}
 
+	// favourites first, then computers nobody is using, then by name; the search box filters by
+	// computer or owner name
+	var shownHosts: [IdentifiableHostInfo] {
+		let favorites = Set(settings.favoriteHosts)
+		let query = hostSearch.trimmingCharacters(in: .whitespaces)
+		return hosts
+			.filter { query.isEmpty || $0.hostname.localizedCaseInsensitiveContains(query) || $0.user.name.localizedCaseInsensitiveContains(query) }
+			.sorted { a, b in
+				let favA = favorites.contains(a.id), favB = favorites.contains(b.id)
+				if favA != favB { return favA }
+				let busyA = a.connections > 0, busyB = b.connections > 0
+				if busyA != busyB { return !busyA }
+				return a.hostname.localizedCaseInsensitiveCompare(b.hostname) == .orderedAscending
+			}
+	}
+
+	func isFavorite(_ i: IdentifiableHostInfo) -> Bool {
+		settings.favoriteHosts.contains(i.id)
+	}
+
+	func toggleFavorite(_ i: IdentifiableHostInfo) {
+		var favorites = settings.favoriteHosts
+		if let index = favorites.firstIndex(of: i.id) {
+			favorites.remove(at: index)
+		} else {
+			favorites.append(i.id)
+		}
+		UISelectionFeedbackGenerator().selectionChanged()
+		withAnimation(.easeInOut(duration: 0.2)) { settings.favoriteHosts = favorites }
+	}
+
+	var hostSearchField: some View {
+		HStack(spacing: 8) {
+			Image(systemName: "magnifyingglass")
+				.opacity(0.5)
+			TextField("Search computers", text: $hostSearch)
+				.disableAutocorrection(true)
+				.autocapitalization(.none)
+			if !hostSearch.isEmpty {
+				Button(action: { hostSearch = "" }) {
+					Image(systemName: "xmark.circle.fill")
+						.opacity(0.4)
+						.frame(width: 32, height: 32)
+						.contentShape(Rectangle())
+				}
+				.accessibilityLabel(Text("Clear search"))
+			}
+		}
+		.foregroundColor(Color("Foreground"))
+		.padding(.horizontal, 12)
+		.frame(minHeight: 44)
+		.frame(maxWidth: 440)
+		.background(glassRounded(10, glass: 22).fill(Color("BackgroundCard")))
+		.padding(.bottom, 4)
+	}
+
 	// One computer: avatar, name and owner on the left, who's on it and Connect on the right.
 	func hostCard(_ i: IdentifiableHostInfo) -> some View {
 		HStack(spacing: 14) {
@@ -409,6 +476,15 @@ struct MainView: View {
 				}
 			}
 			Spacer(minLength: 4)
+			Button(action: { toggleFavorite(i) }) {
+				Image(systemName: isFavorite(i) ? "star.fill" : "star")
+					.font(.system(size: 17, weight: .medium))
+					.foregroundColor(isFavorite(i) ? .yellow : Color("Foreground").opacity(0.35))
+					.frame(width: 36, height: 40)
+					.contentShape(Rectangle())
+			}
+			.buttonStyle(PlainButtonStyle())
+			.accessibilityLabel(Text(isFavorite(i) ? "Remove " + i.hostname + " from favorites" : "Add " + i.hostname + " to favorites"))
 			Button(action: { connectTo(i) }) {
 				Text("Connect")
 					.font(.system(size: 15, weight: .semibold))
@@ -428,6 +504,13 @@ struct MainView: View {
 		.contextMenu {
 			Button(action: { connectTo(i) }) {
 				Label("Connect", systemImage: "play.fill")
+			}
+			Button(action: { toggleFavorite(i) }) {
+				if isFavorite(i) {
+					Label("Remove from Favorites", systemImage: "star.slash")
+				} else {
+					Label("Add to Favorites", systemImage: "star")
+				}
 			}
 			Button(action: { UIPasteboard.general.string = i.hostname }) {
 				Label("Copy Name", systemImage: "doc.on.doc")

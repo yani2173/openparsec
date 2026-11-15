@@ -202,7 +202,8 @@ class CParsec {
 	}
 
 	static func connect(_ peerID: String) -> ParsecStatus {
-		parsecImpl.connect(peerID)
+		HostPrefs.apply(for: peerID)   // this computer's own touch input, resolution and bitrate
+		return parsecImpl.connect(peerID)
 	}
 
 	static func disconnect() {

@@ -21,6 +21,8 @@ final class SettingsStore: ObservableObject {
 			"threeFingerTap": ThreeFingerTapAction.middleClick.rawValue,
 			"twoFingerDrag": TwoFingerDrag.scroll.rawValue,
 			"showQuickActions": true,
+			"perHostSettings": true,
+			"extraKeysRow": true,
 			"optionAsCommand": false,
 			"menuSwipeEdge": MenuSwipeEdge.off.rawValue,
 			"noOverlay": false,
@@ -116,6 +118,22 @@ final class SettingsStore: ObservableObject {
 	var showQuickActions: Bool {
 		get { defaults.bool(forKey: "showQuickActions") }
 		set { store(newValue, "showQuickActions") }
+	}
+
+	var perHostSettings: Bool {
+		get { defaults.bool(forKey: "perHostSettings") }
+		set { store(newValue, "perHostSettings") }
+	}
+
+	var extraKeysRow: Bool {
+		get { defaults.bool(forKey: "extraKeysRow") }
+		set { store(newValue, "extraKeysRow") }
+	}
+
+	// computers marked as favourites, by peer id
+	var favoriteHosts: [String] {
+		get { defaults.stringArray(forKey: "favoriteHosts") ?? [] }
+		set { store(newValue, "favoriteHosts") }
 	}
 
 	var optionAsCommand: Bool {
@@ -223,6 +241,7 @@ struct SettingsHandler {
 	static var threeFingerTap: ThreeFingerTapAction { get { SettingsStore.shared.threeFingerTap } set { SettingsStore.shared.threeFingerTap = newValue } }
 	static var twoFingerDrag: TwoFingerDrag { get { SettingsStore.shared.twoFingerDrag } set { SettingsStore.shared.twoFingerDrag = newValue } }
 	static var showQuickActions: Bool { get { SettingsStore.shared.showQuickActions } set { SettingsStore.shared.showQuickActions = newValue } }
+	static var extraKeysRow: Bool { get { SettingsStore.shared.extraKeysRow } set { SettingsStore.shared.extraKeysRow = newValue } }
 	static var optionAsCommand: Bool { get { SettingsStore.shared.optionAsCommand } set { SettingsStore.shared.optionAsCommand = newValue } }
 	static var menuSwipeEdge: MenuSwipeEdge { get { SettingsStore.shared.menuSwipeEdge } set { SettingsStore.shared.menuSwipeEdge = newValue } }
 	static var noOverlay: Bool { get { SettingsStore.shared.noOverlay } set { SettingsStore.shared.noOverlay = newValue } }
@@ -241,4 +260,36 @@ struct SettingsHandler {
 	static var autoConnectOnLaunch: Bool { get { SettingsStore.shared.autoConnectOnLaunch } set { SettingsStore.shared.autoConnectOnLaunch = newValue } }
 	static var zoomEnabled: Bool { get { SettingsStore.shared.zoomEnabled } set { SettingsStore.shared.zoomEnabled = newValue } }
 	static var constantFps: Bool { get { SettingsStore.shared.constantFps } set { SettingsStore.shared.constantFps = newValue } }
+}
+
+// Touch input, resolution and bitrate remembered for each computer, so a gaming PC and a work PC
+// each open the way you last used them. Applied just before connecting, saved whenever one of them
+// changes during a stream (and once when the stream goes live, so every computer gets a record).
+enum HostPrefs {
+	private static func key(_ peerId: String) -> String { "hostPrefs." + peerId }
+
+	static func apply(for peerId: String) {
+		guard SettingsStore.shared.perHostSettings,
+			  let saved = UserDefaults.standard.dictionary(forKey: key(peerId)) else { return }
+		let store = SettingsStore.shared
+		if let raw = saved["cursorMode"] as? Int, let mode = CursorMode(rawValue: raw), mode != store.cursorMode {
+			store.cursorMode = mode
+		}
+		if let raw = saved["resolution"] as? String, let res = ParsecResolution(rawValue: raw), res != store.resolution {
+			store.resolution = res
+		}
+		if let bitrate = saved["bitrate"] as? Int, bitrate != store.bitrate {
+			store.bitrate = bitrate
+		}
+	}
+
+	static func save(for peerId: String?) {
+		guard SettingsStore.shared.perHostSettings, let peerId = peerId, !peerId.isEmpty else { return }
+		let store = SettingsStore.shared
+		UserDefaults.standard.set([
+			"cursorMode": store.cursorMode.rawValue,
+			"resolution": store.resolution.rawValue,
+			"bitrate": store.bitrate
+		], forKey: key(peerId))
+	}
 }

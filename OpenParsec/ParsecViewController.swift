@@ -109,6 +109,8 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 	private var panHandle: UIImageView?
 	private var keyScrollView: UIScrollView?
 	private var keyBarDone: UIButton?
+	private var extraKeyScrollView: UIScrollView?
+	private var keyBarBuiltWithExtraRow = false
 	private var panStartOffset: CGPoint = .zero
 	private var keyboardCoversPicture = false
 	var onKeyboardVisibilityChanged: ((Bool) -> Void)?
@@ -633,7 +635,7 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 	}
 
 	var accessoryClearBand: CGFloat {
-		keyboardAccessoriesView?.subviews.first?.frame.minY ?? 0
+		keyboardAccessoriesView?.subviews.map { $0.frame.minY }.min() ?? 0
 	}
 
 	func pictureShiftAboveKeyboard(_ keyboard: CGFloat) -> CGFloat? {
@@ -671,6 +673,10 @@ class ParsecViewController: UIViewController, UIScrollViewDelegate, ParsecTouchI
 		let left = (handle.isHidden ? 8 : 48) + inset.left
 		keys.frame = CGRect(x: left, y: 0, width: bar.bounds.width - 72 - left - inset.right, height: 44)
 		keyBarDone?.frame.origin.x = bar.bounds.width - 70 - inset.right
+		if let extra = extraKeyScrollView, let extraBar = extra.superview {
+			let extraInset = extraBar.safeAreaInsets
+			extra.frame = CGRect(x: 8 + extraInset.left, y: 0, width: extraBar.bounds.width - 16 - extraInset.left - extraInset.right, height: 44)
+		}
 	}
 
 	@objc func handlePanHandle(_ gesture: UIPanGestureRecognizer) {
@@ -1812,8 +1818,16 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 	override var inputAccessoryView: UIView? {
 
 		if let keyboardAccessoriesView {
-			return keyboardAccessoriesView
+			if keyBarBuiltWithExtraRow == SettingsHandler.extraKeysRow {
+				return keyboardAccessoriesView
+			}
+			// the Extra Keys Row setting changed: rebuild, letting go of any latched modifier first
+			clearToolbarModifiers(sendToHost: true)
+			self.keyboardAccessoriesView = nil
 		}
+		let extraRow = SettingsHandler.extraKeysRow
+		keyBarBuiltWithExtraRow = extraRow
+		extraKeyScrollView = nil
         // Refactored to UIView with autoresizing mask for better landscape support
         // Using frame-based layout for the container to avoid constraint conflicts with keyboard
 		let containerView = AccessoryContainerView(frame: CGRect(x: 0, y: 0, width: self.view.bounds.width, height: 94))
@@ -1824,7 +1838,7 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 		let toolbarBackground = UIView(frame: CGRect(x: 0, y: 50, width: containerView.bounds.width, height: 44))
 		toolbarBackground.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
 		toolbarBackground.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.9)
-		applyLiquidGlass(toKeyBar: toolbarBackground, in: containerView)
+		applyLiquidGlass(toKeyBar: toolbarBackground, in: containerView, y: 50)
 
 		let scrollView = UIScrollView(frame: CGRect(x: 8, y: 0, width: toolbarBackground.bounds.width - 80, height: 44))
 		scrollView.autoresizingMask = [.flexibleWidth]
@@ -1837,12 +1851,15 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 		buttonStackView.spacing = 8
 		buttonStackView.translatesAutoresizingMaskIntoConstraints = false
 
-		let shiftBarButton = createKeyboardButton(displayText: "⇧", keyText: "SHIFT", isToggleable: true)
-		let windowsBarButton = createKeyboardButton(displayText: "⌘", keyText: "LGUI", isToggleable: true)
-		let tabBarButton = createKeyboardButton(displayText: "⇥", keyText: "TAB", isToggleable: false)
-		let escapeBarButton = createKeyboardButton(displayText: "⎋", keyText: "UIKeyInputEscape", isToggleable: false)
-		let controlBarButton = createKeyboardButton(displayText: "⌃", keyText: "CONTROL", isToggleable: true)
-		let altBarButton = createKeyboardButton(displayText: "⌥", keyText: "LALT", isToggleable: true)
+		// named keys: ⌃ ⌥ ⌘ mean nothing to most Windows users. A modifier stays held (lit up)
+		// until it's tapped again, so Ctrl, Alt, Shift and Win combine with any other key.
+		let mac = SettingsHandler.optionAsCommand
+		let shiftBarButton = createKeyboardButton(displayText: "Shift", keyText: "SHIFT", isToggleable: true)
+		let windowsBarButton = createKeyboardButton(displayText: mac ? "Cmd" : "Win", keyText: "LGUI", isToggleable: true)
+		let tabBarButton = createKeyboardButton(displayText: "Tab", keyText: "TAB", isToggleable: false)
+		let escapeBarButton = createKeyboardButton(displayText: "Esc", keyText: "UIKeyInputEscape", isToggleable: false)
+		let controlBarButton = createKeyboardButton(displayText: "Ctrl", keyText: "CONTROL", isToggleable: true)
+		let altBarButton = createKeyboardButton(displayText: mac ? "Opt" : "Alt", keyText: "LALT", isToggleable: true)
 		let deleteBarButton = createKeyboardButton(displayText: "Del", keyText: "DELETE", isToggleable: false)
 		let f1Button = createKeyboardButton(displayText: "F1", keyText: "F1", isToggleable: false)
 		let f2Button = createKeyboardButton(displayText: "F2", keyText: "F2", isToggleable: false)
@@ -1879,10 +1896,35 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 			createKeyboardButton(displayText: "PgDn", keyText: "PAGEDOWN", isToggleable: false)
 		]
 
-		let buttons = [escapeBarButton, tabBarButton, shiftBarButton, controlBarButton, altBarButton, windowsBarButton, deleteBarButton, upButton, downButton, leftButton, rightButton]
-			+ shortcutButtons
-			+ [f1Button, f2Button, f3Button, f4Button, f5Button, f6Button, f7Button, f8Button, f9Button, f10Button, f11Button, f12Button]
-			+ navButtons
+		let specialKeys = [escapeBarButton, tabBarButton, controlBarButton, altBarButton, shiftBarButton, windowsBarButton, deleteBarButton, leftButton, upButton, downButton, rightButton]
+		let fKeys = [f1Button, f2Button, f3Button, f4Button, f5Button, f6Button, f7Button, f8Button, f9Button, f10Button, f11Button, f12Button]
+		// with the extra row the special keys get a line of their own, always one swipe away from
+		// the keyboard; without it everything shares the one bar as before
+		let buttons = extraRow ? shortcutButtons + fKeys + navButtons : specialKeys + shortcutButtons + fKeys + navButtons
+		if extraRow {
+			let extraBar = UIView(frame: CGRect(x: 0, y: 0, width: containerView.bounds.width, height: 44))
+			extraBar.autoresizingMask = [.flexibleWidth, .flexibleBottomMargin]
+			extraBar.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.9)
+			applyLiquidGlass(toKeyBar: extraBar, in: containerView, y: 0)
+			let extraScroll = UIScrollView(frame: CGRect(x: 8, y: 0, width: extraBar.bounds.width - 16, height: 44))
+			extraScroll.showsHorizontalScrollIndicator = false
+			let extraStack = UIStackView(arrangedSubviews: specialKeys)
+			extraStack.axis = .horizontal
+			extraStack.alignment = .center
+			extraStack.spacing = 6
+			extraStack.translatesAutoresizingMaskIntoConstraints = false
+			extraScroll.addSubview(extraStack)
+			NSLayoutConstraint.activate([
+				extraStack.leadingAnchor.constraint(equalTo: extraScroll.contentLayoutGuide.leadingAnchor),
+				extraStack.trailingAnchor.constraint(equalTo: extraScroll.contentLayoutGuide.trailingAnchor),
+				extraStack.topAnchor.constraint(equalTo: extraScroll.contentLayoutGuide.topAnchor),
+				extraStack.bottomAnchor.constraint(equalTo: extraScroll.contentLayoutGuide.bottomAnchor),
+				extraStack.heightAnchor.constraint(equalTo: extraScroll.frameLayoutGuide.heightAnchor)
+			])
+			extraBar.addSubview(extraScroll)
+			containerView.addSubview(extraBar)
+			extraKeyScrollView = extraScroll
+		}
 
 		for button in buttons {
 			buttonStackView.addArrangedSubview(button)
@@ -2032,9 +2074,9 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 
 	// iOS 26+: the key bar becomes a floating Liquid Glass bar above the keyboard
 	#if compiler(>=6.2)
-	private func applyLiquidGlass(toKeyBar bar: UIView, in container: UIView) {
+	private func applyLiquidGlass(toKeyBar bar: UIView, in container: UIView, y: CGFloat) {
 		guard #available(iOS 26.0, *) else { return }
-		bar.frame = CGRect(x: 8, y: 50, width: container.bounds.width - 16, height: 44)
+		bar.frame = CGRect(x: 8, y: y, width: container.bounds.width - 16, height: 44)
 		bar.backgroundColor = .clear
 		let glass = UIVisualEffectView(effect: UIGlassEffect())
 		glass.frame = bar.bounds
@@ -2044,7 +2086,7 @@ extension ParsecViewController: UIKeyInput, UITextInputTraits {
 		bar.insertSubview(glass, at: 0)
 	}
 	#else
-	private func applyLiquidGlass(toKeyBar bar: UIView, in container: UIView) { }
+	private func applyLiquidGlass(toKeyBar bar: UIView, in container: UIView, y: CGFloat) { }
 	#endif
 
 	@objc func doneTapped() {

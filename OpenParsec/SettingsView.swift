@@ -117,8 +117,8 @@ struct SettingsView: View {
 							}
 							CatTitle("Keyboard")
 							CatList {
-								CatItem("Show Keyboard Button", icon: "keyboard", tint: .gray) {
-									Toggle("", isOn: $settings.showKeyboardButton)
+								CatItem("Extra Keys Row", icon: "keyboard", tint: .blue) {
+									Toggle("", isOn: $settings.extraKeysRow)
 										.frame(width: 80)
 								}
 								CatItem("Option Key as Command", icon: "command", tint: .gray) {
@@ -168,11 +168,11 @@ struct SettingsView: View {
 									Toggle("", isOn: $settings.alwaysShowStatus)
 										.frame(width: 80)
 								}
-								CatItem("Quick Actions Button", icon: "ellipsis.circle.fill", tint: .blue) {
-									Toggle("", isOn: $settings.showQuickActions)
+								CatItem("Remember per Computer", icon: "desktopcomputer", tint: .green) {
+									Toggle("", isOn: $settings.perHostSettings)
 										.frame(width: 80)
 								}
-								CatItem("Show Menu Button", icon: "list.bullet", tint: .blue) {
+								CatItem("Show Menu Button", icon: "ellipsis.circle.fill", tint: .blue) {
 									Toggle("", isOn: Binding(get: { !settings.noOverlay }, set: { settings.noOverlay = !$0 }))
 										.frame(width: 80)
 								}
